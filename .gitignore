@@ -1,0 +1,15 @@
+.gradle/
+.kotlin/
+**/build/
+
+local.properties
+*.iml
+.idea/
+
+*.apk
+*.aab
+*.ap_
+*.dex
+
+*.log
+*.tmp
