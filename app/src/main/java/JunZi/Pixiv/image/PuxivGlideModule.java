@@ -26,7 +26,7 @@ public final class PuxivGlideModule extends AppGlideModule {
         registry.replace(
                 GlideUrl.class,
                 InputStream.class,
-                new OkHttpUrlLoader.Factory(OkHttpProvider.imageClient())
+                new OkHttpUrlLoader.Factory(OkHttpProvider.imageCallFactory())
         );
     }
 }

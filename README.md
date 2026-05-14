@@ -83,6 +83,8 @@ echo json_encode($ips);
 
 ## 构建
 
+普通用户无需自行构建，可以前往 [Releases](https://github.com/ZZCYUN/IllustFerry/releases) 下载已经打包好的 APK。
+
 Windows：
 
 ```powershell

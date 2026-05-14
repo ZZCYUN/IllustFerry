@@ -81,6 +81,14 @@ class TokenStore(context: Context) {
         preferences.edit { putBoolean(KEY_USE_REMOTE_IMAGE_PROXY, enabled) }
     }
 
+    fun readUseHostIpRouting(): Boolean {
+        return preferences.getBoolean(KEY_USE_HOST_IP_ROUTING, true)
+    }
+
+    fun saveUseHostIpRouting(enabled: Boolean) {
+        preferences.edit { putBoolean(KEY_USE_HOST_IP_ROUTING, enabled) }
+    }
+
     fun readImageProxyOrigin(): String? {
         return preferences.getString(KEY_IMAGE_PROXY_ORIGIN, null)?.takeIf { it.isNotBlank() }
     }
@@ -117,6 +125,7 @@ class TokenStore(context: Context) {
         const val KEY_USER_AVATAR = "user_avatar"
         const val KEY_DOWNLOADS = "downloads"
         const val KEY_USE_REMOTE_IMAGE_PROXY = "use_remote_image_proxy"
+        const val KEY_USE_HOST_IP_ROUTING = "use_host_ip_routing"
         const val KEY_IMAGE_PROXY_ORIGIN = "image_proxy_origin"
         const val KEY_PREVIEW_SWIPE_MODE = "preview_swipe_mode"
         const val MAX_STORED_DOWNLOADS = 200
