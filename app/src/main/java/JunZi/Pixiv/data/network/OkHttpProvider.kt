@@ -1,7 +1,9 @@
 package JunZi.Pixiv.data.network
 
 import okhttp3.Interceptor
+import okhttp3.Call
 import okhttp3.OkHttpClient
+import okhttp3.Request
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
@@ -38,6 +40,14 @@ object OkHttpProvider {
             .build()
     }
 
+    private val cleanClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(20, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
+            .writeTimeout(60, TimeUnit.SECONDS)
+            .build()
+    }
+
     @JvmStatic
     fun apiClient(): OkHttpClient = apiClient
 
@@ -45,6 +55,21 @@ object OkHttpProvider {
     fun imageClient(): OkHttpClient = imageClient
 
     fun directClient(): OkHttpClient = directClient
+
+    fun cleanClient(): OkHttpClient = cleanClient
+
+    fun currentApiClient(): OkHttpClient = if (PixivNetworkConfig.shouldUseCompatibilityClient()) apiClient else cleanClient
+
+    fun currentImageClient(): OkHttpClient = if (PixivNetworkConfig.shouldUseCompatibilityClient()) imageClient else cleanClient
+
+    @JvmStatic
+    fun imageCallFactory(): Call.Factory = CurrentImageCallFactory
+
+    private object CurrentImageCallFactory : Call.Factory {
+        override fun newCall(request: Request): Call {
+            return currentImageClient().newCall(request)
+        }
+    }
 
     private object ApiDirectInterceptor : Interceptor {
         override fun intercept(chain: Interceptor.Chain): okhttp3.Response {

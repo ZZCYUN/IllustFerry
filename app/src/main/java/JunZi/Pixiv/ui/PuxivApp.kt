@@ -151,6 +151,7 @@ import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -282,6 +283,7 @@ fun PuxivApp(viewModel: PixivViewModel) {
                     mine = state.mine,
                     downloads = state.downloads.items,
                     diagnostics = state.home.diagnostics,
+                    useHostIpRouting = state.useHostIpRouting,
                     useRemoteImageProxy = state.useRemoteImageProxy,
                     imageProxyInput = state.imageProxyInput,
                     previewSwipeMode = state.previewSwipeMode,
@@ -360,6 +362,7 @@ private fun MainShell(
     mine: MyState,
     downloads: List<DownloadItem>,
     diagnostics: DiagnosticsState,
+    useHostIpRouting: Boolean,
     useRemoteImageProxy: Boolean,
     imageProxyInput: String,
     previewSwipeMode: PreviewSwipeMode,
@@ -512,12 +515,14 @@ private fun MainShell(
             if (screen == AppScreen.Settings) {
                 SettingsScreen(
                     diagnostics = diagnostics,
+                    useHostIpRouting = useHostIpRouting,
                     useRemoteImageProxy = useRemoteImageProxy,
                     imageProxyInput = imageProxyInput,
                     previewSwipeMode = previewSwipeMode,
                     contentPadding = padding,
                     onRefreshDns = { viewModel.refreshDns(showMessage = true) },
                     onDiagnostics = viewModel::runDiagnostics,
+                    onHostIpRoutingEnabledChange = viewModel::updateHostIpRoutingEnabled,
                     onPreviewSwipeModeChange = viewModel::updatePreviewSwipeMode,
                     onImageProxyEnabledChange = viewModel::updateImageProxyEnabled,
                     onImageProxyInputChange = viewModel::updateImageProxyInput,
@@ -2214,12 +2219,14 @@ private fun UploadIllustPanel(
 @Composable
 private fun SettingsScreen(
     diagnostics: DiagnosticsState,
+    useHostIpRouting: Boolean,
     useRemoteImageProxy: Boolean,
     imageProxyInput: String,
     previewSwipeMode: PreviewSwipeMode,
     contentPadding: PaddingValues,
     onRefreshDns: () -> Unit,
     onDiagnostics: () -> Unit,
+    onHostIpRoutingEnabledChange: (Boolean) -> Unit,
     onPreviewSwipeModeChange: (PreviewSwipeMode) -> Unit,
     onImageProxyEnabledChange: (Boolean) -> Unit,
     onImageProxyInputChange: (String) -> Unit,
@@ -2234,7 +2241,7 @@ private fun SettingsScreen(
                     Column {
                         Text("设置")
                         Text(
-                            text = "图片代理、预览方式与网络诊断",
+                            text = "网络路由、图片代理与预览方式",
                             style = MaterialTheme.typography.labelLarge,
                             color = MaterialTheme.colorScheme.secondary,
                         )
@@ -2252,16 +2259,54 @@ private fun SettingsScreen(
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text(
-                text = "网络诊断",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-            )
-            DiagnosticsPanel(
-                diagnostics = diagnostics,
-                onRefreshDns = onRefreshDns,
-                onDiagnostics = onDiagnostics,
-            )
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text(
+                            text = "启用 Host/IP 兼容路由",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            text = if (useHostIpRouting) {
+                                "使用内置 Host IP 与 DNS 映射改善 pixiv 直连"
+                            } else {
+                                "跟随系统网络，适合 VPN 或全局代理环境"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = useHostIpRouting,
+                        onCheckedChange = onHostIpRoutingEnabledChange,
+                    )
+                }
+            }
+            if (useHostIpRouting) {
+                Text(
+                    text = "网络诊断",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+                DiagnosticsPanel(
+                    diagnostics = diagnostics,
+                    onRefreshDns = onRefreshDns,
+                    onDiagnostics = onDiagnostics,
+                )
+            }
             Text(
                 text = "图片加载",
                 style = MaterialTheme.typography.titleMedium,

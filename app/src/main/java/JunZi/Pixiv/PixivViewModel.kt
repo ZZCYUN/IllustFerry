@@ -2,6 +2,11 @@ package JunZi.Pixiv
 
 import android.app.Application
 import android.content.ContentValues
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -196,6 +201,7 @@ data class PuxivUiState(
     val ugoiraTotalFrames: Int = 0,
     val isFullScreenPreview: Boolean = false,
     val previewSwipeMode: PreviewSwipeMode = PreviewSwipeMode.Horizontal,
+    val useHostIpRouting: Boolean = true,
     val useRemoteImageProxy: Boolean = false,
     val imageProxyInput: String = PixivImageProxy.DEFAULT_PROXY_ORIGIN,
     val useWaterfall: Boolean = true,
@@ -210,6 +216,12 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
     private val store = TokenStore(application)
     private val repository = PixivRepository()
     private val _uiState = MutableStateFlow(PuxivUiState())
+    private val connectivityManager = application.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) = updateVpnState()
+        override fun onLost(network: Network) = updateVpnState()
+        override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) = updateVpnState()
+    }
     private val backStack = ArrayDeque<AppScreen>()
     private val previewBackStack = ArrayDeque<PreviewSnapshot>()
     private var dnsWarmupAttempted = false
@@ -217,6 +229,7 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         val session = store.readSession()
+        val useHostIpRouting = store.readUseHostIpRouting()
         val useRemoteImageProxy = store.readUseRemoteImageProxy()
         val storedImageProxyOrigin = store.readImageProxyOrigin()
         val previewSwipeMode = store.readPreviewSwipeMode()
@@ -224,6 +237,8 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
             ?.takeIf { PixivImageProxy.setProxyOrigin(it) }
             ?.let { PixivImageProxy.proxyOrigin }
             ?: PixivImageProxy.DEFAULT_PROXY_ORIGIN
+        PixivNetworkConfig.useHostIpRouting = useHostIpRouting
+        PixivNetworkConfig.isVpnActive = isVpnActive()
         PixivImageProxy.useRemoteProxy = useRemoteImageProxy
         _uiState.update {
             it.copy(
@@ -232,15 +247,17 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
                 accessTokenInput = session?.accessToken.orEmpty(),
                 refreshTokenInput = session?.refreshToken.orEmpty(),
                 downloads = DownloadState(store.readDownloads()),
+                useHostIpRouting = useHostIpRouting,
                 useRemoteImageProxy = useRemoteImageProxy,
                 imageProxyInput = imageProxyOrigin,
                 previewSwipeMode = previewSwipeMode,
             )
         }
         viewModelScope.launch {
-            refreshDns(showMessage = false)
+            if (PixivNetworkConfig.shouldUseCompatibilityClient()) refreshDns(showMessage = false)
             loadHome(refresh = false)
         }
+        registerNetworkCallback()
     }
 
     fun updateAccessToken(value: String) = _uiState.update { it.copy(accessTokenInput = value) }
@@ -393,6 +410,22 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun updateHostIpRoutingEnabled(enabled: Boolean) {
+        PixivNetworkConfig.useHostIpRouting = enabled
+        dnsWarmupAttempted = !enabled
+        store.saveUseHostIpRouting(enabled)
+        _uiState.update {
+            it.copy(
+                useHostIpRouting = enabled,
+                message = if (enabled) {
+                    "已启用 Host/IP 兼容路由"
+                } else {
+                    "已关闭 Host/IP 兼容路由，HTTP 请求将绕过系统代理"
+                },
+            )
+        }
+    }
+
     fun updateImageProxyInput(value: String) = _uiState.update { it.copy(imageProxyInput = value.trim()) }
 
     fun saveImageProxyOrigin() {
@@ -501,14 +534,23 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update {
             it.copy(
                 loginUrl = "",
-                message = "正在准备免代理登录",
+                message = if (_uiState.value.useHostIpRouting) {
+                    "正在准备免代理登录"
+                } else {
+                    "正在准备系统网络登录"
+                },
             )
         }
         viewModelScope.launch {
-            val dnsResult = runCatching { repository.refreshDns() }
+            val dnsResult = if (PixivNetworkConfig.shouldUseCompatibilityClient()) {
+                runCatching { repository.refreshDns() }
+            } else {
+                Result.success(null)
+            }
             dnsWarmupAttempted = true
             dnsResult
                 .onSuccess { result ->
+                    if (result == null) return@onSuccess
                     _uiState.update { state ->
                         state.copy(
                             home = state.home.copy(
@@ -832,6 +874,12 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun refreshDns(showMessage: Boolean = true) {
+        if (!PixivNetworkConfig.shouldUseCompatibilityClient()) {
+            _uiState.update {
+                it.copy(message = if (showMessage) "Host/IP 兼容路由当前未启用" else it.message)
+            }
+            return
+        }
         viewModelScope.launch {
             runCatching { repository.refreshDns() }
                 .onSuccess { result ->
@@ -1648,6 +1696,8 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private suspend fun warmupDnsIfNeeded() {
+        if (!_uiState.value.useHostIpRouting) return
+        if (PixivNetworkConfig.isVpnActive) return
         if (dnsWarmupAttempted) return
         dnsWarmupAttempted = true
         runCatching { repository.refreshDns() }
@@ -1756,6 +1806,30 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         return message?.takeIf { it.isNotBlank() } ?: this::class.java.simpleName
+    }
+
+    override fun onCleared() {
+        runCatching { connectivityManager.unregisterNetworkCallback(networkCallback) }
+        super.onCleared()
+    }
+
+    private fun registerNetworkCallback() {
+        runCatching {
+            connectivityManager.registerNetworkCallback(
+                NetworkRequest.Builder().build(),
+                networkCallback,
+            )
+        }
+    }
+
+    private fun updateVpnState() {
+        PixivNetworkConfig.isVpnActive = isVpnActive()
+    }
+
+    private fun isVpnActive(): Boolean {
+        val activeNetwork = connectivityManager.activeNetwork ?: return false
+        return connectivityManager.getNetworkCapabilities(activeNetwork)
+            ?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
     }
 }
 

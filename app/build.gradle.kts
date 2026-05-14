@@ -11,12 +11,26 @@ android {
         applicationId = "JunZi.Pixiv"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.1.1"
+    }
+
+    signingConfigs {
+        create("illustFerry") {
+            storeFile = file("keystore/IllustFerry.jks")
+            storePassword = "IllustFerry2000"
+            keyAlias = "IllustFerry"
+            keyPassword = "IllustFerry2000"
+        }
     }
 
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("illustFerry")
+        }
+
         release {
+            signingConfig = signingConfigs.getByName("illustFerry")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(

@@ -7,11 +7,21 @@ object PixivNetworkConfig {
         PixivHost.entries.forEach { put(it.rawHost, it.defaultIps) }
     }
 
+    @Volatile
+    var useHostIpRouting: Boolean = true
+
+    @Volatile
+    var isVpnActive: Boolean = false
+
+    fun shouldUseCompatibilityClient(): Boolean = useHostIpRouting && !isVpnActive
+
     fun ipFor(host: String?): String? {
+        if (!shouldUseCompatibilityClient()) return null
         return addressesFor(host).firstOrNull()
     }
 
     fun addressesFor(host: String?): List<String> {
+        if (!shouldUseCompatibilityClient()) return emptyList()
         val normalized = host?.trim()?.lowercase()?.removeSuffix(".") ?: return emptyList()
         hostToIps[normalized]?.let { return it }
         PixivHost.from(normalized)?.defaultIps?.let { return it }

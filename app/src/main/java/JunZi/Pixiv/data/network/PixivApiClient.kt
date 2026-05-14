@@ -28,6 +28,7 @@ class PixivApiClient(
     private val apiClient = OkHttpProvider.apiClient()
     private val directClient = OkHttpProvider.directClient()
     private val imageClient = OkHttpProvider.imageClient()
+    private val cleanClient = OkHttpProvider.cleanClient()
 
     suspend fun exchangeCode(
         code: String,
@@ -50,7 +51,7 @@ class PixivApiClient(
         PixivHeaders.addAppHeaders(requestBuilder, PixivHost.OAuth.rawHost)
         val request = requestBuilder.build()
 
-        execute(request, OAuthTokenResponse::class.java, if (useNetworkProxy) apiClient else directClient)
+        execute(request, OAuthTokenResponse::class.java, if (useNetworkProxy) currentApiClient() else directClient)
     }
 
     suspend fun refreshToken(refreshToken: String): OAuthTokenResponse = withContext(Dispatchers.IO) {
@@ -324,7 +325,7 @@ class PixivApiClient(
 
     suspend fun downloadImageBytes(url: String): ByteArray = withContext(Dispatchers.IO) {
         val request = Request.Builder().url(PixivImageProxy.requireProxied(url)).build()
-        imageClient.newCall(request).execute().use { response ->
+        currentImageClient().newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw IOException("HTTP ${response.code}: ${response.message}")
             response.body.bytes()
         }
@@ -336,7 +337,7 @@ class PixivApiClient(
             .header("Range", "bytes=0-0")
             .get()
             .build()
-        imageClient.newCall(request).execute().use { response ->
+        currentImageClient().newCall(request).execute().use { response ->
             if (!response.isSuccessful) {
                 throw PixivApiException(response.code, "HTTP ${response.code}: ${response.message}")
             }
@@ -362,7 +363,7 @@ class PixivApiClient(
     private fun <T> execute(
         request: Request,
         type: Class<T>,
-        client: okhttp3.OkHttpClient = apiClient,
+        client: okhttp3.OkHttpClient = currentApiClient(),
     ): T {
         return client.newCall(request).execute().use { response ->
             response.parse(type)
@@ -370,9 +371,15 @@ class PixivApiClient(
     }
 
     private fun executeEmpty(request: Request) {
-        apiClient.newCall(request).execute().use { response ->
+        currentApiClient().newCall(request).execute().use { response ->
             response.parseEmpty()
         }
+    }
+
+    private fun currentApiClient(): okhttp3.OkHttpClient = OkHttpProvider.currentApiClient()
+
+    private fun currentImageClient(): okhttp3.OkHttpClient {
+        return if (PixivNetworkConfig.shouldUseCompatibilityClient()) imageClient else cleanClient
     }
 
     private fun <T> Response.parse(type: Class<T>): T {
