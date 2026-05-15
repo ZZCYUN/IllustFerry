@@ -1,7 +1,11 @@
 package JunZi.Pixiv.data
 
+import android.content.Context
 import android.graphics.BitmapFactory
+import android.net.Uri
+import JunZi.Pixiv.UgoiraSaveFormat
 import JunZi.Pixiv.data.model.AuthSession
+import JunZi.Pixiv.data.model.AuthorProfile
 import JunZi.Pixiv.data.model.BookmarkRestrict
 import JunZi.Pixiv.data.model.Illust
 import JunZi.Pixiv.data.model.IllustCommentPage
@@ -13,21 +17,33 @@ import JunZi.Pixiv.data.model.TrendingTag
 import JunZi.Pixiv.data.model.UgoiraFrameImage
 import JunZi.Pixiv.data.model.UploadIllustRequest
 import JunZi.Pixiv.data.model.UploadStatusResponse
+import JunZi.Pixiv.data.model.UserPreviewPage
 import JunZi.Pixiv.data.model.avatarUrl
 import JunZi.Pixiv.data.model.bestOriginal
 import JunZi.Pixiv.data.model.toDomain
 import JunZi.Pixiv.data.network.DnsRefreshResult
 import JunZi.Pixiv.data.network.PixivApiClient
 import JunZi.Pixiv.data.network.PixivDnsUpdater
+import com.aureusapps.android.webpandroid.encoder.WebPAnimEncoder
+import com.aureusapps.android.webpandroid.encoder.WebPAnimEncoderOptions
+import com.aureusapps.android.webpandroid.encoder.WebPConfig
+import com.aureusapps.android.webpandroid.encoder.WebPMuxAnimParams
+import com.aureusapps.android.webpandroid.encoder.WebPPreset
+import com.bumptech.glide.gifencoder.AnimatedGifEncoder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.io.ByteArrayInputStream
+import java.io.File
 import java.util.zip.ZipInputStream
 
 class PixivRepository(
+    context: Context? = null,
     private val api: PixivApiClient = PixivApiClient(),
     private val dnsUpdater: PixivDnsUpdater = PixivDnsUpdater(),
 ) {
+    private val appContext = context?.applicationContext
+
     suspend fun exchangeCode(code: String, verifier: String, useNetworkProxy: Boolean = true): AuthSession {
         val response = api.exchangeCode(code.trim(), verifier, useNetworkProxy)
         val token = response.response ?: response
@@ -153,6 +169,29 @@ class PixivRepository(
         return requireNotNull(api.illustDetail(id, token).illust?.toDomain()) { "Illust not found" }
     }
 
+    suspend fun userDetail(userId: Long, token: String): AuthorProfile {
+        return requireNotNull(api.userDetail(userId, token).toDomain()) { "User not found" }
+    }
+
+    suspend fun userFollowing(
+        userId: Long,
+        token: String,
+        restrict: BookmarkRestrict = BookmarkRestrict.Public,
+    ): UserPreviewPage {
+        val response = api.userFollowing(userId, token, restrict.apiValue)
+        return UserPreviewPage(response.userPreviews.orEmpty().mapNotNull { it.toDomain() }, response.nextUrl)
+    }
+
+    suspend fun userFollowers(userId: Long, token: String): UserPreviewPage {
+        val response = api.userFollowers(userId, token)
+        return UserPreviewPage(response.userPreviews.orEmpty().mapNotNull { it.toDomain() }, response.nextUrl)
+    }
+
+    suspend fun nextUserPreviewsPage(nextUrl: String, token: String): UserPreviewPage {
+        val response = api.nextUserPreviewsPage(nextUrl, token)
+        return UserPreviewPage(response.userPreviews.orEmpty().mapNotNull { it.toDomain() }, response.nextUrl)
+    }
+
     suspend fun related(id: Long, token: String): IllustPage {
         val response = api.relatedIllust(id, token)
         return IllustPage(response.illusts.orEmpty().map { it.toDomain() }, response.nextUrl)
@@ -173,6 +212,18 @@ class PixivRepository(
 
     suspend fun deleteBookmark(id: Long, token: String) {
         api.deleteIllustBookmark(id, token)
+    }
+
+    suspend fun followUser(
+        userId: Long,
+        token: String,
+        restrict: BookmarkRestrict = BookmarkRestrict.Public,
+    ) {
+        api.followUser(userId, token, restrict.apiValue)
+    }
+
+    suspend fun unfollowUser(userId: Long, token: String) {
+        api.unfollowUser(userId, token)
     }
 
     suspend fun ugoiraFrames(
@@ -215,6 +266,44 @@ class PixivRepository(
         api.downloadImageBytes(zipUrl)
     }
 
+    suspend fun downloadUgoira(
+        id: Long,
+        token: String,
+        includeZip: Boolean = false,
+        workingDirectory: File,
+        saveFormat: UgoiraSaveFormat = UgoiraSaveFormat.WEBP,
+        onProgress: (String, Int, Int) -> Unit = { _, _, _ -> },
+    ): UgoiraDownloadResult = withContext(Dispatchers.IO) {
+        val metadata = api.ugoiraMetadata(id, token).metadata ?: throw IllegalStateException("未能取得动画元数据")
+        val zipUrl = metadata.zipUrls.bestOriginal() ?: throw IllegalStateException("未能取得动画下载地址")
+        val framesMeta = metadata.frames.orEmpty()
+        val expectedFrames = framesMeta.size.coerceAtLeast(1)
+        val delays = framesMeta.associate { (it.file.orEmpty()) to (it.delay ?: 80) }
+
+        onProgress("下载动图源文件", 0, expectedFrames)
+        val zipBytes = api.downloadImageBytes(zipUrl)
+        val workDir = File(workingDirectory, "ugoira_${id}_${System.nanoTime()}").apply { mkdirs() }
+        val encodedBytes = try {
+            when (saveFormat) {
+                UgoiraSaveFormat.WEBP -> encodeWebPFromZip(
+                    requireNotNull(appContext) { "WebP 编码需要 Android Context" },
+                    zipBytes,
+                    delays,
+                    expectedFrames,
+                    onProgress,
+                )
+                UgoiraSaveFormat.GIF -> encodeGifFromZip(zipBytes, delays, expectedFrames, onProgress)
+            }
+        } finally {
+            workDir.deleteRecursively()
+        }
+        UgoiraDownloadResult(
+            animatedBytes = encodedBytes,
+            format = saveFormat,
+            zipBytes = if (includeZip) zipBytes else null,
+        )
+    }
+
     suspend fun uploadIllust(token: String, request: UploadIllustRequest): UploadStatusResponse {
         val result = api.uploadIllust(token, request)
         val convertKey = requireNotNull(result.convertKey?.takeIf { it.isNotBlank() }) {
@@ -255,5 +344,120 @@ class PixivRepository(
 
     private companion object {
         private val API_DATE_PATTERN = Regex("""\d{4}-\d{2}-\d{2}""")
+    }
+}
+
+data class UgoiraDownloadResult(
+    val animatedBytes: ByteArray,
+    val format: UgoiraSaveFormat,
+    val zipBytes: ByteArray?,
+)
+
+private data class UgoiraDiskFrame(
+    val file: File,
+    val delayMs: Int,
+)
+
+private fun encodeWebPFromZip(
+    context: Context,
+    zipBytes: ByteArray,
+    delays: Map<String, Int>,
+    expectedFrames: Int,
+    onProgress: (String, Int, Int) -> Unit,
+): ByteArray {
+    val outputFile = File.createTempFile("ugoira_", ".webp", context.cacheDir)
+    var encoder: WebPAnimEncoder? = null
+    var timestamp = 0L
+    var encoded = 0
+
+    try {
+        ZipInputStream(ByteArrayInputStream(zipBytes)).use { zip ->
+            while (true) {
+                val entry = zip.nextEntry ?: break
+                if (!entry.isDirectory) {
+                    val bytes = zip.readBytes()
+                    val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                    if (bitmap != null) {
+                        val webpEncoder = encoder ?: WebPAnimEncoder(
+                            context = context,
+                            width = bitmap.width,
+                            height = bitmap.height,
+                            options = WebPAnimEncoderOptions(
+                                minimizeSize = true,
+                                animParams = WebPMuxAnimParams(loopCount = 0),
+                            ),
+                        ).configure(
+                            config = WebPConfig(
+                                lossless = WebPConfig.COMPRESSION_LOSSY,
+                                quality = 90f,
+                                method = 4,
+                                threadLevel = 1,
+                            ),
+                            preset = WebPPreset.WEBP_PRESET_PICTURE,
+                        ).also { encoder = it }
+
+                        try {
+                            webpEncoder.addFrame(timestamp, bitmap)
+                            timestamp += (delays[entry.name] ?: 80).coerceAtLeast(20).toLong()
+                            encoded += 1
+                            onProgress("编码 WebP", encoded, expectedFrames)
+                        } finally {
+                            bitmap.recycle()
+                        }
+                    }
+                }
+                zip.closeEntry()
+            }
+        }
+
+        val webpEncoder = encoder ?: throw IllegalStateException("未能从动画压缩包解码出有效帧")
+        webpEncoder.assemble(timestamp.coerceAtLeast(1L), Uri.fromFile(outputFile))
+        return outputFile.readBytes()
+    } finally {
+        encoder?.release()
+        outputFile.delete()
+    }
+}
+
+private fun encodeGifFromZip(
+    zipBytes: ByteArray,
+    delays: Map<String, Int>,
+    expectedFrames: Int,
+    onProgress: (String, Int, Int) -> Unit,
+): ByteArray {
+    ZipInputStream(ByteArrayInputStream(zipBytes)).use { zip ->
+        val output = ByteArrayOutputStream()
+        val encoder = AnimatedGifEncoder().apply {
+            setRepeat(0)
+            setQuality(5)
+        }
+        var started = false
+        var encoded = 0
+        while (true) {
+            val entry = zip.nextEntry ?: break
+            if (!entry.isDirectory) {
+                val bytes = zip.readBytes()
+                val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                if (bitmap != null) {
+                    try {
+                        if (!started) {
+                            encoder.setSize(bitmap.width, bitmap.height)
+                            check(encoder.start(output)) { "GIF 编码器启动失败" }
+                            started = true
+                        }
+                        encoder.setDelay((delays[entry.name] ?: 80).coerceAtLeast(20))
+                        encoded += 1
+                        onProgress("编码 GIF", encoded, expectedFrames)
+                        check(encoder.addFrame(bitmap)) { "GIF 第 $encoded 帧编码失败" }
+                    } finally {
+                        bitmap.recycle()
+                    }
+                }
+            }
+            zip.closeEntry()
+        }
+        check(started) { "未能取得动画帧数据" }
+        check(encoder.finish()) { "GIF 编码收尾失败" }
+        return output.toByteArray()
     }
 }

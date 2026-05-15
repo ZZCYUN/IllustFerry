@@ -2,6 +2,7 @@ package JunZi.Pixiv.data.auth
 
 import android.content.Context
 import JunZi.Pixiv.DownloadItem
+import JunZi.Pixiv.DownloadStatus
 import JunZi.Pixiv.PreviewSwipeMode
 import JunZi.Pixiv.data.model.AuthSession
 import androidx.core.content.edit
@@ -63,7 +64,8 @@ class TokenStore(context: Context) {
     fun readDownloads(): List<DownloadItem> {
         val json = preferences.getString(KEY_DOWNLOADS, null)?.takeIf { it.isNotBlank() } ?: return emptyList()
         return runCatching {
-            gson.fromJson<List<DownloadItem>>(json, DOWNLOAD_LIST_TYPE)
+            val parsed: List<DownloadItem?>? = gson.fromJson(json, DOWNLOAD_LIST_TYPE)
+            parsed.orEmpty().mapNotNull { it?.normalized() }
         }.getOrDefault(emptyList())
     }
 
@@ -110,8 +112,49 @@ class TokenStore(context: Context) {
         preferences.edit { putString(KEY_PREVIEW_SWIPE_MODE, mode.name) }
     }
 
+    fun readSaveUgoiraZip(): Boolean {
+        return preferences.getBoolean(KEY_SAVE_UGOIRA_ZIP, false)
+    }
+
+    fun saveSaveUgoiraZip(enabled: Boolean) {
+        preferences.edit { putBoolean(KEY_SAVE_UGOIRA_ZIP, enabled) }
+    }
+
+    fun readFilteredTagsInput(): String {
+        return preferences.getString(KEY_FILTERED_TAGS_INPUT, null).orEmpty()
+    }
+
+    fun saveFilteredTagsInput(value: String) {
+        preferences.edit { putString(KEY_FILTERED_TAGS_INPUT, value) }
+    }
+
+    fun readUgoiraSaveFormat(): String {
+        return preferences.getString(KEY_UGOIRA_SAVE_FORMAT, "WEBP") ?: "WEBP"
+    }
+
+    fun saveUgoiraSaveFormat(format: String) {
+        preferences.edit { putString(KEY_UGOIRA_SAVE_FORMAT, format) }
+    }
+
     private fun String.trimBearer(): String {
         return trim().removePrefix("Bearer ").trim()
+    }
+
+    private fun DownloadItem.normalized(): DownloadItem {
+        val cleanSavedUris = savedUris.orEmpty()
+            .mapNotNull { it?.takeIf { value -> value.isNotBlank() } }
+            .ifEmpty { listOfNotNull(savedUri?.takeIf { it.isNotBlank() }) }
+        return copy(
+            title = title.orEmpty(),
+            fileName = fileName.orEmpty(),
+            status = status ?: DownloadStatus.Failed,
+            pageCount = pageCount.coerceAtLeast(cleanSavedUris.size.coerceAtLeast(1)),
+            relativePath = relativePath.orEmpty(),
+            detail = detail.orEmpty(),
+            savedUri = savedUri?.takeIf { it.isNotBlank() } ?: cleanSavedUris.firstOrNull(),
+            savedUris = cleanSavedUris,
+            zipSavedUri = zipSavedUri?.takeIf { it.isNotBlank() },
+        )
     }
 
     private companion object {
@@ -128,7 +171,10 @@ class TokenStore(context: Context) {
         const val KEY_USE_HOST_IP_ROUTING = "use_host_ip_routing"
         const val KEY_IMAGE_PROXY_ORIGIN = "image_proxy_origin"
         const val KEY_PREVIEW_SWIPE_MODE = "preview_swipe_mode"
+        const val KEY_SAVE_UGOIRA_ZIP = "save_ugoira_zip"
+        const val KEY_FILTERED_TAGS_INPUT = "filtered_tags_input"
+        const val KEY_UGOIRA_SAVE_FORMAT = "ugoira_save_format"
         const val MAX_STORED_DOWNLOADS = 200
-        val DOWNLOAD_LIST_TYPE = object : TypeToken<List<DownloadItem>>() {}.type
+        val DOWNLOAD_LIST_TYPE = object : TypeToken<List<DownloadItem?>>() {}.type
     }
 }

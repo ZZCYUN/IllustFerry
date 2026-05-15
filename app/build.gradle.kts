@@ -11,8 +11,17 @@ android {
         applicationId = "JunZi.Pixiv"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "0.1.1"
+        versionCode = 3
+        versionName = "1.0.0"
+    }
+
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+            isUniversalApk = true
+        }
     }
 
     signingConfigs {
@@ -21,6 +30,7 @@ android {
             storePassword = "IllustFerry2000"
             keyAlias = "IllustFerry"
             keyPassword = "IllustFerry2000"
+            enableV3Signing = true
         }
     }
 
@@ -68,6 +78,8 @@ dependencies {
     implementation("com.google.code.gson:gson:2.14.0")
     implementation("com.github.bumptech.glide:glide:5.0.7")
     implementation("com.github.bumptech.glide:okhttp3-integration:5.0.7")
+    implementation("com.github.bumptech.glide:gifencoder-integration:5.0.7")
+    implementation("com.aureusapps.android:webp-android:1.1.2")
     implementation("org.bouncycastle:bcprov-jdk18on:1.81")
     implementation("org.bouncycastle:bcpkix-jdk18on:1.81")
     annotationProcessor("com.github.bumptech.glide:compiler:5.0.7")

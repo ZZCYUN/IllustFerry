@@ -1,6 +1,8 @@
 package JunZi.Pixiv.ui
 
 import JunZi.Pixiv.AppScreen
+import JunZi.Pixiv.AuthorWorkTab
+import JunZi.Pixiv.AuthorState
 import JunZi.Pixiv.CommentState
 import JunZi.Pixiv.DiscoverFeed
 import JunZi.Pixiv.DiscoverState
@@ -8,14 +10,21 @@ import JunZi.Pixiv.DiagnosticsState
 import JunZi.Pixiv.DownloadItem
 import JunZi.Pixiv.DownloadStatus
 import JunZi.Pixiv.FeedState
+import JunZi.Pixiv.FollowUserFeed
 import JunZi.Pixiv.HomeFeed
+import JunZi.Pixiv.HistoryItem
+import JunZi.Pixiv.HistoryState
 import JunZi.Pixiv.MyState
 import JunZi.Pixiv.PixivViewModel
 import JunZi.Pixiv.PreviewSwipeMode
+import JunZi.Pixiv.UgoiraSaveFormat
 import JunZi.Pixiv.PuxivUiState
+import JunZi.Pixiv.UserPreviewFeedState
 import JunZi.Pixiv.data.model.AuthSession
+import JunZi.Pixiv.data.model.BookmarkRestrict
 import JunZi.Pixiv.data.model.Illust
 import JunZi.Pixiv.data.model.IllustImagePage
+import JunZi.Pixiv.data.model.UserPreview
 import JunZi.Pixiv.data.model.RankingMode
 import JunZi.Pixiv.data.model.SearchSort
 import JunZi.Pixiv.data.model.SearchTarget
@@ -23,7 +32,6 @@ import JunZi.Pixiv.data.model.TrendingTag
 import JunZi.Pixiv.data.model.UgoiraFrameImage
 import JunZi.Pixiv.data.network.LocalPixivProxy
 import android.annotation.SuppressLint
-import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -40,8 +48,8 @@ import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.widget.Toast
 import android.view.accessibility.AccessibilityManager
+import android.widget.ImageView
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -52,12 +60,14 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.LocalOverscrollFactory
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateCentroid
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -106,6 +116,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Login
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.automirrored.filled.NavigateBefore
 import androidx.compose.material.icons.automirrored.filled.NavigateNext
@@ -116,6 +127,7 @@ import androidx.compose.material.icons.filled.CollectionsBookmark
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Link
@@ -178,6 +190,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.graphicsLayer
@@ -197,9 +210,13 @@ import androidx.core.net.toUri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.bumptech.glide.Glide
 import com.bumptech.glide.RequestManager
+import com.bumptech.glide.load.DataSource
+import com.bumptech.glide.load.engine.GlideException
 import com.bumptech.glide.load.model.GlideUrl
 import com.bumptech.glide.request.RequestOptions
+import com.bumptech.glide.request.RequestListener
 import com.bumptech.glide.request.target.CustomTarget
+import com.bumptech.glide.request.target.Target
 import com.bumptech.glide.request.transition.Transition
 import androidx.webkit.ProxyConfig
 import androidx.webkit.ProxyController
@@ -213,6 +230,9 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.concurrent.Executor
 
 private val PuxivSurfaceShape = RoundedCornerShape(8.dp)
@@ -230,6 +250,8 @@ private const val PuxivZoomedPageTurnThresholdDp = 72f
 private enum class MyTab(val label: String) {
     Works("作品"),
     Bookmarks("收藏"),
+    History("历史"),
+    Following("关注"),
     Downloads("下载"),
     Upload("投稿"),
 }
@@ -240,7 +262,7 @@ fun PuxivApp(viewModel: PixivViewModel) {
     val snackbarHostState = remember { SnackbarHostState() }
     val mainShellScreen = if (state.screen == AppScreen.Preview) state.previewReturnScreen else state.screen
     val showMainShell = mainShellScreen in setOf(AppScreen.Home, AppScreen.Search, AppScreen.Me, AppScreen.Settings)
-    val showTransientScreen = state.screen in setOf(AppScreen.Login, AppScreen.WebLogin, AppScreen.Preview)
+    val showTransientScreen = state.screen in setOf(AppScreen.Login, AppScreen.WebLogin, AppScreen.Preview, AppScreen.Author)
 
     LaunchedEffect(state.message) {
         val message = state.message
@@ -281,12 +303,16 @@ fun PuxivApp(viewModel: PixivViewModel) {
                     nextUrl = state.nextUrl,
                     session = state.session,
                     mine = state.mine,
+                    history = state.history,
                     downloads = state.downloads.items,
                     diagnostics = state.home.diagnostics,
                     useHostIpRouting = state.useHostIpRouting,
                     useRemoteImageProxy = state.useRemoteImageProxy,
                     imageProxyInput = state.imageProxyInput,
+                    saveUgoiraZip = state.saveUgoiraZip,
+                    filteredTagsInput = state.filteredTagsInput,
                     previewSwipeMode = state.previewSwipeMode,
+                    ugoiraSaveFormat = state.ugoiraSaveFormat,
                     viewModel = viewModel,
                 )
             }
@@ -325,6 +351,20 @@ fun PuxivApp(viewModel: PixivViewModel) {
                             onDownload = viewModel::downloadSelectedIllust,
                             onCommentInputChange = viewModel::updateCommentInput,
                             onSendComment = viewModel::sendComment,
+                            onOpenAuthor = viewModel::openAuthor,
+                        )
+
+                        AppScreen.Author -> AuthorScreen(
+                            author = state.author,
+                            onBack = viewModel::goBack,
+                            onRefreshProfile = viewModel::loadAuthorProfile,
+                            onRefreshWorks = { viewModel.loadAuthorWorks(refresh = true) },
+                            onLoadMore = { viewModel.loadAuthorWorks(refresh = false) },
+                            onSelectTab = viewModel::selectAuthorTab,
+                            onFollowPublic = { viewModel.followAuthor(BookmarkRestrict.Public) },
+                            onFollowPrivate = { viewModel.followAuthor(BookmarkRestrict.Private) },
+                            onUnfollow = viewModel::unfollowAuthor,
+                            onOpenPreview = viewModel::openPreview,
                         )
 
                         else -> Unit
@@ -360,12 +400,16 @@ private fun MainShell(
     nextUrl: String?,
     session: AuthSession?,
     mine: MyState,
+    history: HistoryState,
     downloads: List<DownloadItem>,
     diagnostics: DiagnosticsState,
     useHostIpRouting: Boolean,
     useRemoteImageProxy: Boolean,
     imageProxyInput: String,
+    saveUgoiraZip: Boolean,
+    filteredTagsInput: String,
     previewSwipeMode: PreviewSwipeMode,
+    ugoiraSaveFormat: UgoiraSaveFormat,
     viewModel: PixivViewModel,
 ) {
     val mainScreens = remember { listOf(AppScreen.Home, AppScreen.Search, AppScreen.Me) }
@@ -493,15 +537,25 @@ private fun MainShell(
                         isActive = selectedMainScreen == AppScreen.Me,
                         session = session,
                         mine = mine,
+                        history = history,
                         downloads = downloads,
                         contentPadding = padding,
                         onLoadMine = { viewModel.loadMine(refresh = true) },
                         onLoadWorks = { viewModel.loadMyWorks(refresh = true) },
                         onLoadBookmarks = { viewModel.loadMyBookmarks(refresh = true) },
+                        onLoadHistory = { viewModel.loadHistory(refresh = true) },
                         onLoadMoreWorks = { viewModel.loadMyWorks(refresh = false) },
                         onLoadMoreBookmarks = { viewModel.loadMyBookmarks(refresh = false) },
+                        onLoadMoreHistory = viewModel::loadMoreHistory,
+                        onLoadFollowing = { viewModel.loadMyFollowing(it, refresh = true) },
+                        onLoadMoreFollowing = { viewModel.loadMyFollowing(it, refresh = false) },
+                        onClearHistory = viewModel::clearHistory,
+                        onDeleteHistory = viewModel::deleteHistoryItem,
+                        onDeleteDownload = viewModel::deleteDownloadItem,
                         onOpenPreview = viewModel::openPreview,
+                        onOpenAuthor = viewModel::openAuthor,
                         onUploadIllust = viewModel::uploadIllust,
+                        onOpenDownloadPreview = viewModel::openDownloadedPreview,
                         onOpenSettings = viewModel::openSettings,
                         onLogout = viewModel::logout,
                         onOpenLogin = viewModel::openLoginScreen,
@@ -518,7 +572,10 @@ private fun MainShell(
                     useHostIpRouting = useHostIpRouting,
                     useRemoteImageProxy = useRemoteImageProxy,
                     imageProxyInput = imageProxyInput,
+                    saveUgoiraZip = saveUgoiraZip,
+                    filteredTagsInput = filteredTagsInput,
                     previewSwipeMode = previewSwipeMode,
+                    ugoiraSaveFormat = ugoiraSaveFormat,
                     contentPadding = padding,
                     onRefreshDns = { viewModel.refreshDns(showMessage = true) },
                     onDiagnostics = viewModel::runDiagnostics,
@@ -528,6 +585,10 @@ private fun MainShell(
                     onImageProxyInputChange = viewModel::updateImageProxyInput,
                     onSaveImageProxy = viewModel::saveImageProxyOrigin,
                     onResetImageProxy = viewModel::resetImageProxyOrigin,
+                    onSaveUgoiraZipChange = viewModel::updateSaveUgoiraZip,
+                    onFilteredTagsInputChange = viewModel::updateFilteredTagsInput,
+                    onSaveFilteredTags = viewModel::saveFilteredTags,
+                    onUgoiraSaveFormatChange = viewModel::updateUgoiraSaveFormat,
                 )
             }
         }
@@ -1344,6 +1405,7 @@ private fun SectionHeader(
     modifier: Modifier = Modifier,
     title: String,
     count: Int,
+    countLabel: String = "$count works",
     isLoading: Boolean,
     onRefresh: () -> Unit,
     actionLabel: String? = null,
@@ -1362,7 +1424,7 @@ private fun SectionHeader(
                 fontWeight = FontWeight.Bold,
             )
             Text(
-                text = "$count works",
+                text = countLabel,
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -1585,15 +1647,25 @@ private fun MeScreen(
     isActive: Boolean,
     session: AuthSession?,
     mine: MyState,
+    history: HistoryState,
     downloads: List<DownloadItem>,
     contentPadding: PaddingValues,
     onLoadMine: () -> Unit,
     onLoadWorks: () -> Unit,
     onLoadBookmarks: () -> Unit,
+    onLoadHistory: () -> Unit,
     onLoadMoreWorks: () -> Unit,
     onLoadMoreBookmarks: () -> Unit,
+    onLoadMoreHistory: () -> Unit,
+    onLoadFollowing: (FollowUserFeed) -> Unit,
+    onLoadMoreFollowing: (FollowUserFeed) -> Unit,
+    onClearHistory: () -> Unit,
+    onDeleteHistory: (Long) -> Unit,
+    onDeleteDownload: (String) -> Unit,
     onOpenPreview: (Illust) -> Unit,
+    onOpenAuthor: (UserPreview) -> Unit,
     onUploadIllust: (String, String, List<String>, String, Int, String, Boolean, Int, List<Uri>) -> Unit,
+    onOpenDownloadPreview: (DownloadItem) -> Unit,
     onOpenSettings: () -> Unit,
     onLogout: () -> Unit,
     onOpenLogin: () -> Unit,
@@ -1601,6 +1673,8 @@ private fun MeScreen(
 ) {
     var selectedTab by remember { mutableStateOf(MyTab.Works) }
     var showLoginDialog by remember { mutableStateOf(false) }
+    var pendingDeleteHistory by remember { mutableStateOf<HistoryItem?>(null) }
+    var pendingDeleteDownload by remember { mutableStateOf<DownloadItem?>(null) }
     val gridState = rememberLazyStaggeredGridState()
     val decorativeFeedSemantics = rememberDecorativeFeedSemantics()
 
@@ -1626,16 +1700,7 @@ private fun MeScreen(
                         )
                     }
                 },
-                actions = {
-                    if (session == null) {
-                        TextButton(onClick = { showLoginDialog = true }) {
-                            Text("登录")
-                        }
-                    }
-                    IconButton(onClick = onOpenSettings) {
-                        Icon(Icons.Default.Settings, contentDescription = "设置")
-                    }
-                },
+                actions = {},
             )
         },
         contentWindowInsets = WindowInsets.safeDrawing,
@@ -1659,6 +1724,9 @@ private fun MeScreen(
                     session = session,
                     worksCount = mine.works.items.size,
                     bookmarksCount = mine.bookmarks.items.size,
+                    followCount = mine.followCount,
+                    followerCount = mine.followerCount,
+                    hasMoreFollowers = mine.hasMoreFollowers,
                     downloadsCount = downloads.size,
                     isUploading = mine.isUploading,
                     onRefresh = onLoadMine,
@@ -1671,7 +1739,11 @@ private fun MeScreen(
                 MyTabRow(
                     selected = selectedTab,
                     onSelect = { tab ->
-                        if (session == null) {
+                        val requiresLogin = tab == MyTab.Works ||
+                            tab == MyTab.Bookmarks ||
+                            tab == MyTab.Following ||
+                            tab == MyTab.Upload
+                        if (requiresLogin && session == null) {
                             showLoginDialog = true
                             return@MyTabRow
                         }
@@ -1679,6 +1751,11 @@ private fun MeScreen(
                         when (tab) {
                             MyTab.Works -> if (mine.works.items.isEmpty()) onLoadWorks()
                             MyTab.Bookmarks -> if (mine.bookmarks.items.isEmpty()) onLoadBookmarks()
+                            MyTab.History -> if (history.items.isEmpty()) onLoadHistory()
+                            MyTab.Following -> {
+                                if (mine.publicFollowing.items.isEmpty()) onLoadFollowing(FollowUserFeed.Public)
+                                if (mine.privateFollowing.items.isEmpty()) onLoadFollowing(FollowUserFeed.Private)
+                            }
                             MyTab.Downloads -> Unit
                             MyTab.Upload -> Unit
                         }
@@ -1735,9 +1812,105 @@ private fun MeScreen(
                     }
                 }
 
+                MyTab.History -> {
+                    item(span = StaggeredGridItemSpan.FullLine) {
+                        SectionHeader(
+                            title = "最近浏览",
+                            count = history.items.size,
+                            isLoading = history.isLoading,
+                            onRefresh = onLoadHistory,
+                            actionLabel = null,
+                            showRefresh = true,
+                        )
+                    }
+                    if (history.items.isEmpty() && history.isLoading) {
+                        item(span = StaggeredGridItemSpan.FullLine) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 24.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                CircularProgressIndicator()
+                            }
+                        }
+                    } else if (!history.error.isNullOrBlank()) {
+                        item(span = StaggeredGridItemSpan.FullLine) {
+                            Surface(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.errorContainer,
+                                contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                            ) {
+                                Text(
+                                    text = history.error,
+                                    modifier = Modifier.padding(12.dp),
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                        }
+                    } else if (history.items.isEmpty()) {
+                        item(span = StaggeredGridItemSpan.FullLine) {
+                            EmptyStateCard(
+                                text = "还没有浏览历史",
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    } else {
+                        item(span = StaggeredGridItemSpan.FullLine) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End,
+                            ) {
+                                TextButton(onClick = onClearHistory) {
+                                    Text("清空历史")
+                                }
+                            }
+                        }
+                        items(
+                            history.items,
+                            key = { "history-${it.illust.id}-${it.viewedAtMillis}" },
+                            contentType = { "history-card" },
+                        ) { entry ->
+                            HistoryIllustCard(
+                                entry = entry,
+                                modifier = Modifier.fillMaxWidth(),
+                                onClick = { onOpenPreview(entry.illust) },
+                                onDelete = { pendingDeleteHistory = entry },
+                            )
+                        }
+                        if (history.hasMore || history.isLoading) {
+                            item(span = StaggeredGridItemSpan.FullLine) {
+                                PagingFooter(
+                                    isLoadingMore = history.isLoading,
+                                    nextUrl = if (history.hasMore) "history" else null,
+                                    hasItems = history.items.isNotEmpty(),
+                                    onLoadMore = onLoadMoreHistory,
+                                )
+                            }
+                        }
+                    }
+                }
+
+                MyTab.Following -> {
+                    item(span = StaggeredGridItemSpan.FullLine) {
+                        FollowingUsersPanel(
+                            publicFollowing = mine.publicFollowing,
+                            privateFollowing = mine.privateFollowing,
+                            onRefresh = onLoadFollowing,
+                            onLoadMore = onLoadMoreFollowing,
+                            onOpenAuthor = onOpenAuthor,
+                        )
+                    }
+                }
+
                 MyTab.Downloads -> {
                     item(span = StaggeredGridItemSpan.FullLine) {
-                        DownloadsPanel(downloads = downloads)
+                        DownloadsPanel(
+                            downloads = downloads,
+                            onOpenPreview = onOpenDownloadPreview,
+                            onDelete = { pendingDeleteDownload = it },
+                        )
                     }
                 }
             }
@@ -1761,6 +1934,60 @@ private fun MeScreen(
                             onStartWebLogin()
                         }) {
                             Text("使用网页登录")
+                        }
+                    },
+                )
+            }
+
+            pendingDeleteHistory?.let { entry ->
+                AlertDialog(
+                    onDismissRequest = { pendingDeleteHistory = null },
+                    title = { Text("删除历史记录") },
+                    text = {
+                        Text(
+                            "确认删除《${entry.illust.title.ifBlank { "#${entry.illust.id}" }}》这条浏览历史吗？",
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                onDeleteHistory(entry.illust.id)
+                                pendingDeleteHistory = null
+                            },
+                        ) {
+                            Text("删除")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { pendingDeleteHistory = null }) {
+                            Text("取消")
+                        }
+                    },
+                )
+            }
+
+            pendingDeleteDownload?.let { item ->
+                AlertDialog(
+                    onDismissRequest = { pendingDeleteDownload = null },
+                    title = { Text("删除下载记录") },
+                    text = {
+                        Text(
+                            "确认删除《${item.title.ifBlank { item.fileName }}》这条下载记录吗？",
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                onDeleteDownload(item.key)
+                                pendingDeleteDownload = null
+                            },
+                        ) {
+                            Text("删除")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { pendingDeleteDownload = null }) {
+                            Text("取消")
                         }
                     },
                 )
@@ -1822,6 +2049,9 @@ private fun MyHeader(
     session: AuthSession?,
     worksCount: Int,
     bookmarksCount: Int,
+    followCount: Int,
+    followerCount: Int,
+    hasMoreFollowers: Boolean,
     downloadsCount: Int,
     isUploading: Boolean,
     onRefresh: () -> Unit,
@@ -1885,6 +2115,8 @@ private fun MyHeader(
             ) {
                 MetadataPill("$worksCount 作品")
                 MetadataPill("$bookmarksCount 收藏")
+                MetadataPill("$followCount 关注")
+                MetadataPill("${followerCount}${if (hasMoreFollowers) "+" else ""} 粉丝")
                 MetadataPill("$downloadsCount 下载")
                 if (isUploading) MetadataPill("投稿中")
             }
@@ -1897,9 +2129,13 @@ private fun MyHeader(
                     modifier = Modifier.weight(1f),
                     contentPadding = PaddingValues(horizontal = 10.dp),
                 ) {
-                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Icon(
+                        if (session == null) Icons.AutoMirrored.Filled.Login else Icons.Default.Refresh,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
                     Spacer(Modifier.width(6.dp))
-                    Text("刷新")
+                    Text(if (session == null) "登录" else "刷新")
                 }
                 FilledTonalButton(
                     onClick = onSettings,
@@ -1910,14 +2146,16 @@ private fun MyHeader(
                     Spacer(Modifier.width(6.dp))
                     Text("设置")
                 }
-                FilledTonalButton(
-                    onClick = if (session == null) onLoginClick else onLogout,
-                    modifier = Modifier.weight(1f),
-                    contentPadding = PaddingValues(horizontal = 10.dp),
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("退出")
+                if (session != null) {
+                    FilledTonalButton(
+                        onClick = onLogout,
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 10.dp),
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("退出")
+                    }
                 }
             }
         }
@@ -1936,7 +2174,9 @@ private fun MyTabRow(
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Row(
-            modifier = Modifier.padding(8.dp),
+            modifier = Modifier
+                .horizontalScroll(rememberScrollState())
+                .padding(8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             MyTab.entries.forEach { tab ->
@@ -1948,6 +2188,8 @@ private fun MyTabRow(
                         val icon = when (tab) {
                             MyTab.Works -> Icons.Default.Image
                             MyTab.Bookmarks -> Icons.Default.CollectionsBookmark
+                            MyTab.History -> Icons.Default.History
+                            MyTab.Following -> Icons.Default.AccountCircle
                             MyTab.Downloads -> Icons.Default.Download
                             MyTab.Upload -> Icons.Default.CloudUpload
                         }
@@ -1987,10 +2229,183 @@ private fun MinePagingFooter(
 }
 
 @Composable
+private fun FollowingUsersPanel(
+    publicFollowing: UserPreviewFeedState,
+    privateFollowing: UserPreviewFeedState,
+    onRefresh: (FollowUserFeed) -> Unit,
+    onLoadMore: (FollowUserFeed) -> Unit,
+    onOpenAuthor: (UserPreview) -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            FollowingUserSection(
+                title = "关注的人",
+                feed = publicFollowing,
+                emptyText = "还没有公开关注",
+                onRefresh = { onRefresh(FollowUserFeed.Public) },
+                onLoadMore = { onLoadMore(FollowUserFeed.Public) },
+                onOpenAuthor = onOpenAuthor,
+            )
+            FollowingUserSection(
+                title = "悄悄关注的人",
+                feed = privateFollowing,
+                emptyText = "还没有悄悄关注",
+                onRefresh = { onRefresh(FollowUserFeed.Private) },
+                onLoadMore = { onLoadMore(FollowUserFeed.Private) },
+                onOpenAuthor = onOpenAuthor,
+            )
+        }
+    }
+}
+
+@Composable
+private fun FollowingUserSection(
+    title: String,
+    feed: UserPreviewFeedState,
+    emptyText: String,
+    onRefresh: () -> Unit,
+    onLoadMore: () -> Unit,
+    onOpenAuthor: (UserPreview) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        SectionHeader(
+            title = title,
+            count = feed.items.size,
+            countLabel = "${feed.items.size} users",
+            isLoading = feed.isLoading,
+            onRefresh = onRefresh,
+            showRefresh = true,
+        )
+        if (!feed.error.isNullOrBlank()) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.errorContainer,
+                contentColor = MaterialTheme.colorScheme.onErrorContainer,
+            ) {
+                Text(
+                    text = feed.error,
+                    modifier = Modifier.padding(12.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        if (feed.items.isEmpty()) {
+            EmptyStateCard(
+                text = if (feed.isLoading) "正在加载..." else emptyText,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        } else {
+            feed.items.forEach { user ->
+                FollowingUserCard(user = user, onClick = { onOpenAuthor(user) })
+            }
+            PagingFooter(
+                isLoadingMore = feed.isLoading,
+                nextUrl = feed.nextUrl,
+                hasItems = feed.items.isNotEmpty(),
+                onLoadMore = onLoadMore,
+            )
+        }
+    }
+}
+
+@Composable
+private fun FollowingUserCard(
+    user: UserPreview,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+    ) {
+        Column(
+            modifier = Modifier.padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                GlideImage(
+                    url = user.avatarUrl,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(RoundedCornerShape(8.dp)),
+                    crop = true,
+                    requestSize = PuxivAvatarImageSize,
+                )
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text(
+                        text = user.userName.ifBlank { "#${user.userId}" },
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = user.userAccount.takeIf { it.isNotBlank() }?.let { "@$it" } ?: "ID ${user.userId}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    user.comment.takeIf { it.isNotBlank() }?.let { comment ->
+                        Text(
+                            text = comment,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                Icon(
+                    Icons.AutoMirrored.Filled.NavigateNext,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.secondary,
+                )
+            }
+            if (user.illusts.isNotEmpty()) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    user.illusts.take(3).forEach { illust ->
+                        GlideImage(
+                            url = illust.previewUrl,
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(6.dp)),
+                            aspectRatio = 1f,
+                            crop = true,
+                            requestSize = PuxivTrendImageSize,
+                        )
+                    }
+                    repeat((3 - user.illusts.take(3).size).coerceAtLeast(0)) {
+                        Spacer(Modifier.weight(1f))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun DownloadsPanel(
     downloads: List<DownloadItem>,
+    onOpenPreview: (DownloadItem) -> Unit,
+    onDelete: (DownloadItem) -> Unit,
 ) {
-    val context = LocalContext.current
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(8.dp),
@@ -2006,7 +2421,7 @@ private fun DownloadsPanel(
                 Column(Modifier.weight(1f)) {
                     Text("下载内容", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Text(
-                        text = "保存到系统 Downloads/IllustFerry",
+                        text = "点击条目可用本地预览查看作品",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -2017,31 +2432,23 @@ private fun DownloadsPanel(
                 }
             }
             if (downloads.isEmpty()) {
-                Text(
-                    text = "还没有下载内容",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                EmptyStateCard("还没有下载内容", Modifier.fillMaxWidth())
             } else {
                 downloads.forEach { item ->
-                    val canOpen = item.status == DownloadStatus.Finished && !item.savedUri.isNullOrBlank()
+                    val savedUris = item.localSavedUris()
+                    val canOpen = item.status == DownloadStatus.Finished && savedUris.any { it.isNotBlank() }
+                    val previewUrl = savedUris.firstOrNull { it.isNotBlank() } ?: item.illust?.previewUrl
                     Surface(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable(enabled = canOpen) {
-                                val uri = item.savedUri?.toUri() ?: return@clickable
-                                val intent = Intent(Intent.ACTION_VIEW)
-                                    .setDataAndType(uri, item.fileName.downloadMimeType())
-                                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                runCatching {
-                                    context.startActivity(intent)
-                                }.recoverCatching {
-                                    context.startActivity(Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
-                                }.onFailure {
-                                    val message = if (it is ActivityNotFoundException) "没有可预览此文件的应用" else "无法打开下载内容"
-                                    Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
-                                }
-                            },
+                            .combinedClickable(
+                                onClick = {
+                                    if (canOpen) {
+                                        onOpenPreview(item)
+                                    }
+                                },
+                                onLongClick = { onDelete(item) },
+                            ),
                         shape = RoundedCornerShape(8.dp),
                         color = MaterialTheme.colorScheme.surfaceVariant,
                     ) {
@@ -2050,25 +2457,74 @@ private fun DownloadsPanel(
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Icon(
-                                imageVector = when (item.status) {
-                                    DownloadStatus.Finished -> Icons.Default.Save
-                                    DownloadStatus.Failed -> Icons.Default.Refresh
-                                    else -> Icons.Default.Download
-                                },
-                                contentDescription = null,
-                                tint = when (item.status) {
-                                    DownloadStatus.Failed -> MaterialTheme.colorScheme.error
-                                    DownloadStatus.Finished -> MaterialTheme.colorScheme.primary
-                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
-                                },
-                            )
+                            Box(
+                                modifier = Modifier
+                                    .size(72.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(MaterialTheme.colorScheme.surface),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                if (!previewUrl.isNullOrBlank()) {
+                                    GlideImage(
+                                        url = previewUrl,
+                                        modifier = Modifier.matchParentSize(),
+                                        aspectRatio = 1f,
+                                        crop = true,
+                                        requestSize = PuxivCardImageSize,
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = when (item.status) {
+                                            DownloadStatus.Finished -> Icons.Default.Save
+                                            DownloadStatus.Failed -> Icons.Default.Refresh
+                                            else -> Icons.Default.Download
+                                        },
+                                        contentDescription = null,
+                                        tint = when (item.status) {
+                                            DownloadStatus.Failed -> MaterialTheme.colorScheme.error
+                                            DownloadStatus.Finished -> MaterialTheme.colorScheme.primary
+                                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                        },
+                                    )
+                                }
+                                Surface(
+                                    modifier = Modifier
+                                        .align(Alignment.BottomEnd)
+                                        .padding(4.dp),
+                                    shape = RoundedCornerShape(999.dp),
+                                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                                ) {
+                                    Icon(
+                                        imageVector = when (item.status) {
+                                            DownloadStatus.Finished -> Icons.Default.Save
+                                            DownloadStatus.Failed -> Icons.Default.Refresh
+                                            else -> Icons.Default.Download
+                                        },
+                                        contentDescription = null,
+                                        modifier = Modifier.padding(4.dp).size(14.dp),
+                                        tint = when (item.status) {
+                                            DownloadStatus.Failed -> MaterialTheme.colorScheme.error
+                                            DownloadStatus.Finished -> MaterialTheme.colorScheme.primary
+                                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                        },
+                                    )
+                                }
+                            }
                             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                 Text(
-                                    text = item.fileName,
+                                    text = item.title.ifBlank { item.fileName },
                                     style = MaterialTheme.typography.bodyMedium,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    text = when {
+                                        item.isUgoira -> "动图 ${item.fileName.substringAfterLast('.', "WEBP").uppercase()}"
+                                        item.pageCount > 1 -> "${item.pageCount} 张图片"
+                                        else -> "单张图片"
+                                    },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                                 Text(
                                     text = item.detail.ifBlank { item.status.label },
@@ -2078,15 +2534,23 @@ private fun DownloadsPanel(
                                     overflow = TextOverflow.Ellipsis,
                                 )
                             }
-                            Text(
-                                text = item.status.label,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = if (item.status == DownloadStatus.Failed) {
-                                    MaterialTheme.colorScheme.error
-                                } else {
-                                    MaterialTheme.colorScheme.secondary
-                                },
-                            )
+                            if (canOpen) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.NavigateNext,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.secondary,
+                                )
+                            } else {
+                                Text(
+                                    text = item.status.label,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = if (item.status == DownloadStatus.Failed) {
+                                        MaterialTheme.colorScheme.error
+                                    } else {
+                                        MaterialTheme.colorScheme.secondary
+                                    },
+                                )
+                            }
                         }
                     }
                 }
@@ -2155,7 +2619,7 @@ private fun UploadIllustPanel(
                 value = tagsText,
                 onValueChange = { tagsText = it },
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("标签，用空格或逗号分隔") },
+                label = { Text("标签，空格、半角逗号、全角逗号均可分隔") },
                 singleLine = true,
                 shape = RoundedCornerShape(8.dp),
             )
@@ -2222,7 +2686,10 @@ private fun SettingsScreen(
     useHostIpRouting: Boolean,
     useRemoteImageProxy: Boolean,
     imageProxyInput: String,
+    saveUgoiraZip: Boolean,
+    filteredTagsInput: String,
     previewSwipeMode: PreviewSwipeMode,
+    ugoiraSaveFormat: UgoiraSaveFormat,
     contentPadding: PaddingValues,
     onRefreshDns: () -> Unit,
     onDiagnostics: () -> Unit,
@@ -2232,6 +2699,10 @@ private fun SettingsScreen(
     onImageProxyInputChange: (String) -> Unit,
     onSaveImageProxy: () -> Unit,
     onResetImageProxy: () -> Unit,
+    onSaveUgoiraZipChange: (Boolean) -> Unit,
+    onFilteredTagsInputChange: (String) -> Unit,
+    onSaveFilteredTags: () -> Unit,
+    onUgoiraSaveFormatChange: (UgoiraSaveFormat) -> Unit,
 ) {
     Scaffold(
         modifier = Modifier.padding(contentPadding),
@@ -2387,6 +2858,113 @@ private fun SettingsScreen(
                     }
                 }
             }
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            ) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = "动图保存格式",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = "WebP 体积更小质量更好，GIF 兼容性更广。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        FilterChip(
+                            selected = ugoiraSaveFormat == UgoiraSaveFormat.WEBP,
+                            onClick = { onUgoiraSaveFormatChange(UgoiraSaveFormat.WEBP) },
+                            label = { Text("WebP") },
+                        )
+                        FilterChip(
+                            selected = ugoiraSaveFormat == UgoiraSaveFormat.GIF,
+                            onClick = { onUgoiraSaveFormatChange(UgoiraSaveFormat.GIF) },
+                            label = { Text("GIF") },
+                        )
+                    }
+                }
+            }
+            Text(
+                text = "内容过滤",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = "下载动图时保留 zip",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            text = "默认只保留动图文件。开启后会额外把原始 zip 存到 Downloads/IllustFerry。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = saveUgoiraZip,
+                        onCheckedChange = onSaveUgoiraZipChange,
+                    )
+                }
+            }
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            ) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = "过滤标签",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = "用半角逗号分隔，命中标签的作品会从列表里隐藏。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    OutlinedTextField(
+                        value = filteredTagsInput,
+                        onValueChange = onFilteredTagsInputChange,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("例：AI生成,R-18,苦手标签") },
+                    )
+                    FilledTonalButton(
+                        onClick = onSaveFilteredTags,
+                        contentPadding = PaddingValues(horizontal = 12.dp),
+                    ) {
+                        Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("保存过滤标签")
+                    }
+                }
+            }
             Text(
                 text = "作品预览",
                 style = MaterialTheme.typography.titleMedium,
@@ -2429,7 +3007,157 @@ private fun SettingsScreen(
                     }
                 }
             }
+            OpenSourceLicenseSection()
         }
+    }
+}
+
+@Composable
+private fun OpenSourceLicenseSection() {
+    val context = LocalContext.current
+    Text(
+        text = "开源许可",
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.Bold,
+    )
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Default.Code, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        text = "IllustFerry",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = "GPL-3.0 开源协议",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            OpenSourceLibraries.forEach { library ->
+                OpenSourceLicenseRow(
+                    library = library,
+                    onOpen = { openExternalUrl(context, it) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun OpenSourceLicenseRow(
+    library: OpenSourceLibrary,
+    onOpen: (String) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable { onOpen(library.licenseUrl) }
+            .padding(vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Default.Link,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.secondary,
+            )
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = library.name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = library.license,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+private data class OpenSourceLibrary(
+    val name: String,
+    val license: String,
+    val licenseUrl: String,
+)
+
+private val OpenSourceLibraries = listOf(
+    OpenSourceLibrary(
+        name = "IllustFerry",
+        license = "GNU General Public License v3.0",
+        licenseUrl = "https://www.gnu.org/licenses/gpl-3.0.html",
+    ),
+    OpenSourceLibrary(
+        name = "AndroidX Activity / Core / Lifecycle / WebKit",
+        license = "Apache License 2.0",
+        licenseUrl = "https://www.apache.org/licenses/LICENSE-2.0",
+    ),
+    OpenSourceLibrary(
+        name = "Jetpack Compose / Material 3 / Material Icons",
+        license = "Apache License 2.0",
+        licenseUrl = "https://www.apache.org/licenses/LICENSE-2.0",
+    ),
+    OpenSourceLibrary(
+        name = "Kotlinx Coroutines",
+        license = "Apache License 2.0",
+        licenseUrl = "https://github.com/Kotlin/kotlinx.coroutines/blob/master/LICENSE.txt",
+    ),
+    OpenSourceLibrary(
+        name = "OkHttp",
+        license = "Apache License 2.0",
+        licenseUrl = "https://github.com/square/okhttp/blob/master/LICENSE.txt",
+    ),
+    OpenSourceLibrary(
+        name = "Gson",
+        license = "Apache License 2.0",
+        licenseUrl = "https://github.com/google/gson/blob/main/LICENSE",
+    ),
+    OpenSourceLibrary(
+        name = "Glide / Glide OkHttp / Glide GIF Encoder",
+        license = "Simplified BSD License / Apache License 2.0",
+        licenseUrl = "https://github.com/bumptech/glide/blob/master/LICENSE",
+    ),
+    OpenSourceLibrary(
+        name = "webp-android",
+        license = "MIT License",
+        licenseUrl = "https://github.com/UdaraWanasinghe/webp-android/blob/main/LICENSE",
+    ),
+    OpenSourceLibrary(
+        name = "Bouncy Castle bcprov / bcpkix",
+        license = "Bouncy Castle Licence",
+        licenseUrl = "https://www.bouncycastle.org/licence.html",
+    ),
+)
+
+private fun openExternalUrl(context: Context, url: String) {
+    runCatching {
+        context.startActivity(Intent(Intent.ACTION_VIEW, url.toUri()))
     }
 }
 
@@ -2958,6 +3686,7 @@ private fun PreviewScreen(
     onDownload: () -> Unit,
     onCommentInputChange: (String) -> Unit,
     onSendComment: () -> Unit,
+    onOpenAuthor: (Illust) -> Unit,
 ) {
     val illust = state.selectedIllust
     val previewStateHolder = rememberSaveableStateHolder()
@@ -3040,6 +3769,7 @@ private fun PreviewScreen(
                                 onLoadRelated = onLoadRelated,
                                 onOpenPreview = onOpenPreview,
                                 onTagClick = onTagClick,
+                                onOpenAuthor = onOpenAuthor,
                                 modifier = Modifier.fillMaxWidth(),
                             )
                             CommentsPanel(
@@ -3114,6 +3844,7 @@ private fun PreviewScreen(
                                 onLoadRelated = onLoadRelated,
                                 onOpenPreview = onOpenPreview,
                                 onTagClick = onTagClick,
+                                onOpenAuthor = onOpenAuthor,
                                 modifier = Modifier.fillMaxWidth(),
                             )
                             CommentsPanel(
@@ -3138,6 +3869,306 @@ private fun PreviewScreen(
             onSelectImage = onSelectImage,
             onClose = onCloseFullScreen,
         )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AuthorScreen(
+    author: AuthorState,
+    onBack: () -> Unit,
+    onRefreshProfile: () -> Unit,
+    onRefreshWorks: () -> Unit,
+    onLoadMore: () -> Unit,
+    onSelectTab: (AuthorWorkTab) -> Unit,
+    onFollowPublic: () -> Unit,
+    onFollowPrivate: () -> Unit,
+    onUnfollow: () -> Unit,
+    onOpenPreview: (Illust) -> Unit,
+) {
+    val gridState = rememberLazyStaggeredGridState()
+    val feed = when (author.selectedTab) {
+        AuthorWorkTab.Illust -> author.illusts
+        AuthorWorkTab.Manga -> author.manga
+    }
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(
+                        text = author.userName.ifBlank { "作者" },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = {
+                        onRefreshProfile()
+                        onRefreshWorks()
+                    }) {
+                        Icon(Icons.Default.Refresh, contentDescription = "刷新")
+                    }
+                },
+            )
+        },
+        contentWindowInsets = WindowInsets.safeDrawing,
+    ) { padding ->
+        LazyVerticalStaggeredGrid(
+            columns = StaggeredGridCells.Adaptive(154.dp),
+            state = gridState,
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding),
+            contentPadding = PaddingValues(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalItemSpacing = 12.dp,
+        ) {
+            item(span = StaggeredGridItemSpan.FullLine) {
+                AuthorHeader(
+                    author = author,
+                    onRefresh = onRefreshProfile,
+                    onFollowPublic = onFollowPublic,
+                    onFollowPrivate = onFollowPrivate,
+                    onUnfollow = onUnfollow,
+                )
+            }
+            item(span = StaggeredGridItemSpan.FullLine) {
+                AuthorTabRow(
+                    selected = author.selectedTab,
+                    illustCount = author.totalIllusts,
+                    mangaCount = author.totalManga,
+                    onSelect = onSelectTab,
+                )
+            }
+            if (feed.error != null) {
+                item(span = StaggeredGridItemSpan.FullLine) {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                    ) {
+                        Text(
+                            text = feed.error,
+                            modifier = Modifier.padding(12.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            }
+            if (feed.items.isEmpty() && (author.isLoadingProfile || author.isLoadingWorks)) {
+                item(span = StaggeredGridItemSpan.FullLine) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 32.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CircularProgressIndicator()
+                    }
+                }
+            } else if (feed.items.isEmpty()) {
+                item(span = StaggeredGridItemSpan.FullLine) {
+                    EmptySearch(Modifier.fillMaxWidth())
+                }
+            } else {
+                items(
+                    feed.items,
+                    key = { "author-${author.userId}-${it.id}" },
+                    contentType = { "illust-card" },
+                ) { illust ->
+                    IllustCard(
+                        illust = illust,
+                        onClick = onOpenPreview,
+                    )
+                }
+                item(span = StaggeredGridItemSpan.FullLine) {
+                    PagingFooter(
+                        isLoadingMore = author.isLoadingWorks && feed.items.isNotEmpty(),
+                        nextUrl = feed.nextUrl,
+                        hasItems = feed.items.isNotEmpty(),
+                        onLoadMore = onLoadMore,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AuthorHeader(
+    author: AuthorState,
+    onRefresh: () -> Unit,
+    onFollowPublic: () -> Unit,
+    onFollowPrivate: () -> Unit,
+    onUnfollow: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                GlideImage(
+                    url = author.userAvatarUrl,
+                    modifier = Modifier
+                        .size(56.dp)
+                        .clip(RoundedCornerShape(12.dp)),
+                    crop = true,
+                    requestSize = PuxivAvatarImageSize,
+                )
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = author.userName.ifBlank { "Unknown artist" },
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    author.userAccount.takeIf { it.isNotBlank() }?.let {
+                        Text(
+                            text = "@$it",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.secondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Text(
+                        text = "粉丝 ${author.followerCount} · 好友 ${author.myPixivCount}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                MetadataPill("${author.totalIllusts} 插画")
+                MetadataPill("${author.totalManga} 漫画")
+                MetadataPill("${author.totalBookmarks} 收藏")
+            }
+            author.userComment.takeIf { it.isNotBlank() }?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 4,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (author.isFollowed) {
+                    FilledTonalButton(onClick = onUnfollow, enabled = !author.isFollowBusy) {
+                        Text("取消关注")
+                    }
+                } else {
+                    FilledTonalButton(onClick = onFollowPublic, enabled = !author.isFollowBusy) {
+                        Text("关注")
+                    }
+                    OutlinedButton(onClick = onFollowPrivate, enabled = !author.isFollowBusy) {
+                        Text("悄悄关注")
+                    }
+                }
+                OutlinedButton(onClick = onRefresh, enabled = !author.isLoadingProfile) {
+                    Text("刷新")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AuthorTabRow(
+    selected: AuthorWorkTab,
+    illustCount: Int,
+    mangaCount: Int,
+    onSelect: (AuthorWorkTab) -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Row(
+            modifier = Modifier.padding(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            FilterChip(
+                selected = selected == AuthorWorkTab.Illust,
+                onClick = { onSelect(AuthorWorkTab.Illust) },
+                label = { Text("插画 $illustCount") },
+            )
+            FilterChip(
+                selected = selected == AuthorWorkTab.Manga,
+                onClick = { onSelect(AuthorWorkTab.Manga) },
+                label = { Text("漫画 $mangaCount") },
+            )
+        }
+    }
+}
+
+@Composable
+private fun HistoryIllustCard(
+    entry: HistoryItem,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        IllustCard(
+            illust = entry.illust,
+            onLongPress = onDelete,
+            onClick = { onClick() },
+        )
+        Text(
+            text = formatViewedAt(entry.viewedAtMillis),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 4.dp),
+        )
+    }
+}
+
+@Composable
+private fun EmptyStateCard(
+    text: String,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier.height(112.dp),
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(
+                text = text,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
@@ -3175,11 +4206,19 @@ private fun Modifier.feedSemanticsBoundary(enabled: Boolean): Modifier {
     return if (enabled) clearAndSetSemantics {} else this
 }
 
+private fun formatViewedAt(viewedAtMillis: Long): String {
+    return runCatching {
+        DateTimeFormatter.ofPattern("MM-dd HH:mm")
+            .format(Instant.ofEpochMilli(viewedAtMillis).atZone(ZoneId.systemDefault()))
+    }.getOrElse { viewedAtMillis.toString() }
+}
+
 @Composable
 private fun IllustCard(
     illust: Illust,
     forceSquare: Boolean = false,
     clearSemantics: Boolean = false,
+    onLongPress: (() -> Unit)? = null,
     onClick: (Illust) -> Unit,
 ) {
     val cardModifier = if (clearSemantics) {
@@ -3187,9 +4226,12 @@ private fun IllustCard(
     } else {
         Modifier
     }
-    ElevatedCard(
+    val interactiveModifier = cardModifier.combinedClickable(
         onClick = { onClick(illust) },
-        modifier = cardModifier,
+        onLongClick = onLongPress,
+    )
+    ElevatedCard(
+        modifier = interactiveModifier,
         shape = RoundedCornerShape(8.dp),
         colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
     ) {
@@ -3302,7 +4344,9 @@ private fun HorizontalImagePreview(
                 url = urls.getOrNull(index),
                 modifier = Modifier
                     .fillMaxSize()
-                    .clickable { onOpenFullScreen(index) },
+                    .pointerInput(Unit) {
+                        detectTapGestures(onTap = { onOpenFullScreen(index) })
+                    },
                 crop = false,
                 showLoadingBar = true,
                 requestSize = PuxivPreviewImageSize,
@@ -3396,7 +4440,9 @@ private fun VerticalComicPreview(
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(ratio.coerceIn(0.18f, 4.5f))
-                    .clickable { onOpenFullScreen(index) },
+                    .pointerInput(index) {
+                        detectTapGestures(onTap = { onOpenFullScreen(index) })
+                    },
                 crop = false,
                 showLoadingBar = true,
                 requestSize = PuxivPreviewImageSize,
@@ -3845,6 +4891,7 @@ private fun IllustMeta(
     onLoadRelated: () -> Unit,
     onOpenPreview: (Illust) -> Unit,
     onTagClick: (String) -> Unit,
+    onOpenAuthor: (Illust) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -3855,7 +4902,25 @@ private fun IllustMeta(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
+            Row(
+                modifier = Modifier.weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                GlideImage(
+                    url = illust.authorAvatarUrl,
+                    modifier = Modifier
+                        .size(42.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable { onOpenAuthor(illust) },
+                    crop = true,
+                    requestSize = PuxivAvatarImageSize,
+                )
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable { onOpenAuthor(illust) },
+                ) {
                 Text(
                     text = illust.title.ifBlank { "#${illust.id}" },
                     style = MaterialTheme.typography.titleMedium,
@@ -3872,6 +4937,7 @@ private fun IllustMeta(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                }
             }
             IconButton(
                 onClick = onDownload,
@@ -3966,6 +5032,17 @@ private fun GlideImage(
     val background = MaterialTheme.colorScheme.surfaceVariant
     val imageModifier = if (aspectRatio != null) modifier.aspectRatio(aspectRatio) else modifier
     val imageUrl = url?.takeIf { it.isNotBlank() }
+    if (imageUrl != null && imageUrl.shouldUseDrawableGlide()) {
+        AnimatedGlideImage(
+            url = imageUrl,
+            modifier = imageModifier,
+            crop = crop,
+            showLoadingBar = showLoadingBar,
+            requestSize = requestSize,
+            onDrawableSize = onDrawableSize,
+        )
+        return
+    }
     val cacheKey = remember(imageUrl, requestSize) { PuxivImageCache.key(imageUrl, requestSize) }
     var bitmap by remember(cacheKey) { mutableStateOf(cacheKey?.let(PuxivImageCache::get)) }
     var isLoading by remember(cacheKey, bitmap) { mutableStateOf(cacheKey != null && bitmap == null) }
@@ -4030,6 +5107,96 @@ private fun GlideImage(
                 contentScale = if (crop) ContentScale.Crop else ContentScale.Fit,
             )
         }
+        if (showLoadingBar && isLoading) {
+            PreviewLoadingStrip(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth(),
+            )
+        }
+    }
+}
+
+@Composable
+private fun AnimatedGlideImage(
+    url: String?,
+    modifier: Modifier = Modifier,
+    crop: Boolean = true,
+    showLoadingBar: Boolean = false,
+    requestSize: Int? = null,
+    onDrawableSize: ((Int, Int) -> Unit)? = null,
+) {
+    val background = MaterialTheme.colorScheme.surfaceVariant
+    val backgroundColor = background.toArgb()
+    val imageUrl = url?.takeIf { it.isNotBlank() }
+    var isLoading by remember(imageUrl, requestSize) { mutableStateOf(imageUrl != null) }
+    val currentOnDrawableSize by rememberUpdatedState(onDrawableSize)
+
+    Box(
+        modifier = modifier
+            .background(background)
+            .clearAndSetSemantics {},
+        contentAlignment = Alignment.Center,
+    ) {
+        AndroidView(
+            modifier = Modifier.matchParentSize(),
+            factory = { context ->
+                ImageView(context).apply {
+                    setBackgroundColor(backgroundColor)
+                    scaleType = if (crop) ImageView.ScaleType.CENTER_CROP else ImageView.ScaleType.FIT_CENTER
+                    adjustViewBounds = false
+                }
+            },
+            update = { view ->
+                view.setBackgroundColor(backgroundColor)
+                view.scaleType = if (crop) ImageView.ScaleType.CENTER_CROP else ImageView.ScaleType.FIT_CENTER
+                val loadKey = "${imageUrl.orEmpty()}|${requestSize ?: 0}|$crop"
+                if (view.tag == loadKey) return@AndroidView
+                view.tag = loadKey
+                if (imageUrl == null) {
+                    Glide.with(view).clear(view)
+                    view.setImageDrawable(null)
+                    isLoading = false
+                    return@AndroidView
+                }
+                isLoading = true
+                val options = if (requestSize != null) {
+                    RequestOptions().override(requestSize)
+                } else {
+                    RequestOptions()
+                }
+                Glide.with(view)
+                    .load(imageUrl.glideModel())
+                    .apply(options)
+                    .listener(object : RequestListener<Drawable> {
+                        override fun onLoadFailed(
+                            e: GlideException?,
+                            model: Any?,
+                            target: Target<Drawable>?,
+                            isFirstResource: Boolean,
+                        ): Boolean {
+                            isLoading = false
+                            return false
+                        }
+
+                        override fun onResourceReady(
+                            resource: Drawable,
+                            model: Any?,
+                            target: Target<Drawable>?,
+                            dataSource: DataSource,
+                            isFirstResource: Boolean,
+                        ): Boolean {
+                            isLoading = false
+                            currentOnDrawableSize?.invoke(
+                                resource.intrinsicWidth.coerceAtLeast(1),
+                                resource.intrinsicHeight.coerceAtLeast(1),
+                            )
+                            return false
+                        }
+                    })
+                    .into(view)
+            },
+        )
         if (showLoadingBar && isLoading) {
             PreviewLoadingStrip(
                 modifier = Modifier
@@ -4112,7 +5279,7 @@ private object PuxivImageCache {
         }.disallowHardwareConfig()
         requestManager
             .asBitmap()
-            .load(GlideUrl(url))
+            .load(url.glideModel())
             .apply(options)
             .into(target)
     }
@@ -4144,6 +5311,23 @@ private object PuxivImageCache {
             }
         }
     }
+}
+
+private fun String.glideModel(): Any {
+    return when {
+        startsWith("content://", ignoreCase = true) ||
+            startsWith("file://", ignoreCase = true) ||
+            startsWith("android.resource://", ignoreCase = true) -> toUri()
+        else -> GlideUrl(this)
+    }
+}
+
+private fun String.shouldUseDrawableGlide(): Boolean {
+    val lower = substringBefore('?').substringBefore('#').lowercase()
+    return startsWith("content://", ignoreCase = true) ||
+        startsWith("file://", ignoreCase = true) ||
+        lower.endsWith(".gif") ||
+        lower.endsWith(".webp")
 }
 
 @Composable
@@ -4412,6 +5596,12 @@ private val DownloadStatus.label: String
         DownloadStatus.Finished -> "完成"
         DownloadStatus.Failed -> "失败"
     }
+
+private fun DownloadItem.localSavedUris(): List<String> {
+    return savedUris.orEmpty()
+        .mapNotNull { it?.takeIf { value -> value.isNotBlank() } }
+        .ifEmpty { listOfNotNull(savedUri?.takeIf { it.isNotBlank() }) }
+}
 
 private fun String.downloadMimeType(): String {
     return when (substringAfterLast('.', "").lowercase()) {

@@ -6,6 +6,8 @@ import JunZi.Pixiv.data.model.IllustsResponse
 import JunZi.Pixiv.data.model.OAuthTokenResponse
 import JunZi.Pixiv.data.model.PixivErrorResponse
 import JunZi.Pixiv.data.model.TrendingTagsResponse
+import JunZi.Pixiv.data.model.UserDetailResponse
+import JunZi.Pixiv.data.model.UserPreviewsResponse
 import JunZi.Pixiv.data.model.UploadIllustRequest
 import JunZi.Pixiv.data.model.UploadIllustResponse
 import JunZi.Pixiv.data.model.UploadStatusResponse
@@ -213,6 +215,42 @@ class PixivApiClient(
         execute(authorizedGet(url.toString(), accessToken), IllustDetailResponse::class.java)
     }
 
+    suspend fun userDetail(userId: Long, accessToken: String): UserDetailResponse = withContext(Dispatchers.IO) {
+        val url = "$API_BASE/v1/user/detail".toHttpUrl().newBuilder()
+            .addQueryParameter("filter", FILTER_FOR_IOS)
+            .addQueryParameter("user_id", userId.toString())
+            .build()
+
+        execute(authorizedGet(url.toString(), accessToken), UserDetailResponse::class.java)
+    }
+
+    suspend fun userFollowing(
+        userId: Long,
+        accessToken: String,
+        restrict: String = "public",
+    ): UserPreviewsResponse = withContext(Dispatchers.IO) {
+        val url = "$API_BASE/v1/user/following".toHttpUrl().newBuilder()
+            .addQueryParameter("filter", FILTER_FOR_IOS)
+            .addQueryParameter("user_id", userId.toString())
+            .addQueryParameter("restrict", restrict)
+            .build()
+
+        execute(authorizedGet(url.toString(), accessToken), UserPreviewsResponse::class.java)
+    }
+
+    suspend fun userFollowers(userId: Long, accessToken: String): UserPreviewsResponse = withContext(Dispatchers.IO) {
+        val url = "$API_BASE/v1/user/follower".toHttpUrl().newBuilder()
+            .addQueryParameter("filter", FILTER_FOR_IOS)
+            .addQueryParameter("user_id", userId.toString())
+            .build()
+
+        execute(authorizedGet(url.toString(), accessToken), UserPreviewsResponse::class.java)
+    }
+
+    suspend fun nextUserPreviewsPage(nextUrl: String, accessToken: String): UserPreviewsResponse = withContext(Dispatchers.IO) {
+        execute(authorizedGet(nextUrl, accessToken), UserPreviewsResponse::class.java)
+    }
+
     suspend fun relatedIllust(illustId: Long, accessToken: String): IllustsResponse = withContext(Dispatchers.IO) {
         val url = "$API_BASE/v2/illust/related".toHttpUrl().newBuilder()
             .addQueryParameter("filter", FILTER_FOR_IOS)
@@ -273,6 +311,27 @@ class PixivApiClient(
 
         val request = authorizedPost("$API_BASE/v1/illust/bookmark/delete", accessToken, body)
         executeEmpty(request)
+    }
+
+    suspend fun followUser(
+        userId: Long,
+        accessToken: String,
+        restrict: String = "public",
+    ): Unit = withContext(Dispatchers.IO) {
+        val body = FormBody.Builder()
+            .add("user_id", userId.toString())
+            .add("restrict", restrict)
+            .build()
+
+        executeEmpty(authorizedPost("$API_BASE/v1/user/follow/add", accessToken, body))
+    }
+
+    suspend fun unfollowUser(userId: Long, accessToken: String): Unit = withContext(Dispatchers.IO) {
+        val body = FormBody.Builder()
+            .add("user_id", userId.toString())
+            .build()
+
+        executeEmpty(authorizedPost("$API_BASE/v1/user/follow/delete", accessToken, body))
     }
 
     suspend fun uploadIllust(
