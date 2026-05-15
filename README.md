@@ -12,8 +12,11 @@ IllustFerry（画渡）是一个面向 pixiv 的非官方 Android 客户端实�
 - API 请求 Host/IP 兼容路由。
 - 图片直连、备用 Host、默认远端图片代理与可手动填写的图片代理 fallback。
 - 首页推荐、排行榜、最新作品与搜索。
-- 作品详情、相关作品、评论、收藏与下载队列。
+- 作品详情、相关作品、评论、收藏、浏览历史与下载队列。
 - 个人作品、收藏列表与基础投稿面板。
+- 已下载内容支持离线本地预览，多图下载会保留全部分页，GIF / 动 WebP 预览保持动画播放。
+- 动图下载支持 WebP / GIF 输出，并可按需额外保留 pixiv 原始 zip。
+- 设置页支持图片代理、过滤标签、预览方向、动图格式和开源许可查看。
 - 网络诊断面板，用于检查 DNS、API 与图片访问状态。
 
 ## 网络兼容设计
@@ -69,6 +72,8 @@ echo json_encode($ips);
 - Gson
 - Glide
 - Glide OkHttp integration
+- Glide GIF Encoder integration
+- webp-android
 - Bouncy Castle `bcprov-jdk18on`
 - Bouncy Castle `bcpkix-jdk18on`
 
@@ -103,11 +108,18 @@ Debug APK 输出路径：
 app/build/outputs/apk/debug/
 ```
 
+项目已启用 ABI 拆包，Debug / Release 构建会生成 `arm64-v8a`、`armeabi-v7a`、`x86`、`x86_64` 与 universal APK。Release APK 输出路径：
+
+```text
+app/build/outputs/apk/release/
+```
+
 ## 使用
 
 1. 安装 Debug APK。
 2. 使用 OAuth code 登录，或手动填入 access token。
 3. 在设置页刷新 DNS、运行网络诊断，并按需切换或手动填写图片代理。
+4. 在作品详情页下载图片或动图，已下载内容可在“我的 / 下载”中离线预览。
 
 Token 保存在本应用的 Android `SharedPreferences` 中。请勿公开包含账号信息的日志、截图或备份。
 

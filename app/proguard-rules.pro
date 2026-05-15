@@ -23,3 +23,8 @@
 # Local Pixiv proxy generates certificates at runtime in release builds.
 -keep class org.bouncycastle.** { *; }
 -dontwarn org.bouncycastle.**
+
+# webp-android has unused URI decoding helpers compiled against OkHttp 4 internals.
+# The app only uses the Bitmap-based animation encoder path, so this release-only
+# R8 warning is safe to suppress.
+-dontwarn okhttp3.internal.Util

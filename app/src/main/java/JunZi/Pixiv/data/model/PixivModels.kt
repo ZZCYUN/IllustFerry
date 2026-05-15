@@ -45,6 +45,21 @@ data class IllustDetailResponse(
     @SerializedName("illust") val illust: IllustDto? = null,
 )
 
+data class UserDetailResponse(
+    @SerializedName("user") val user: UserDto? = null,
+    @SerializedName("profile") val profile: UserProfileDto? = null,
+)
+
+data class UserPreviewsResponse(
+    @SerializedName("user_previews") val userPreviews: List<UserPreviewDto>? = null,
+    @SerializedName("next_url") val nextUrl: String? = null,
+)
+
+data class UserPreviewDto(
+    @SerializedName("user") val user: UserDto? = null,
+    @SerializedName("illusts") val illusts: List<IllustDto>? = null,
+)
+
 data class IllustCommentsResponse(
     @SerializedName("comments") val comments: List<IllustCommentDto>? = null,
     @SerializedName("next_url") val nextUrl: String? = null,
@@ -150,8 +165,22 @@ data class UserDto(
     @SerializedName("id") val id: Long? = null,
     @SerializedName("name") val name: String? = null,
     @SerializedName("account") val account: String? = null,
+    @SerializedName("comment") val comment: String? = null,
     @SerializedName("profile_image_urls") val profileImageUrls: ProfileImageUrlsDto? = null,
     @SerializedName("is_followed") val isFollowed: Boolean? = null,
+)
+
+data class UserProfileDto(
+    @SerializedName("webpage") val webpage: String? = null,
+    @SerializedName("twitter_url") val twitterUrl: String? = null,
+    @SerializedName("pawoo_url") val pawooUrl: String? = null,
+    @SerializedName("background_image_url") val backgroundImageUrl: String? = null,
+    @SerializedName("total_follow_users") val totalFollowUsers: Int? = null,
+    @SerializedName("total_follower") val totalFollower: Int? = null,
+    @SerializedName("total_mypixiv_users") val totalMyPixivUsers: Int? = null,
+    @SerializedName("total_illusts") val totalIllusts: Int? = null,
+    @SerializedName("total_manga") val totalManga: Int? = null,
+    @SerializedName("total_illust_bookmarks_public") val totalIllustBookmarksPublic: Int? = null,
 )
 
 data class IllustCommentDto(
@@ -218,6 +247,7 @@ data class Illust(
     val authorId: Long,
     val authorName: String,
     val authorAccount: String,
+    val authorAvatarUrl: String?,
     val type: String,
     val caption: String,
     val previewUrl: String?,
@@ -283,6 +313,39 @@ data class TrendingTag(
     val previewUrl: String?,
 )
 
+@Immutable
+data class AuthorProfile(
+    val userId: Long,
+    val userName: String,
+    val userAccount: String,
+    val avatarUrl: String?,
+    val comment: String,
+    val isFollowed: Boolean,
+    val followingCount: Int,
+    val followerCount: Int,
+    val myPixivCount: Int,
+    val totalIllusts: Int,
+    val totalManga: Int,
+    val totalBookmarks: Int,
+)
+
+@Immutable
+data class UserPreview(
+    val userId: Long,
+    val userName: String,
+    val userAccount: String,
+    val avatarUrl: String?,
+    val comment: String,
+    val isFollowed: Boolean,
+    val illusts: List<Illust>,
+)
+
+@Immutable
+data class UserPreviewPage(
+    val items: List<UserPreview>,
+    val nextUrl: String?,
+)
+
 data class UploadImagePart(
     val bytes: ByteArray,
     val mimeType: String,
@@ -322,6 +385,7 @@ fun IllustDto.toDomain(): Illust {
         authorId = user?.id ?: 0L,
         authorName = user?.name.orEmpty(),
         authorAccount = user?.account.orEmpty(),
+        authorAvatarUrl = user?.avatarUrl(),
         type = type.orEmpty(),
         caption = caption.orEmpty(),
         previewUrl = preview,
@@ -380,6 +444,39 @@ fun UserDto.avatarUrl(): String? {
             profileImageUrls?.px50x50,
             profileImageUrls?.px16x16,
         ),
+    )
+}
+
+fun UserDetailResponse.toDomain(): AuthorProfile? {
+    val detailUser = user ?: return null
+    val userId = detailUser.id ?: return null
+    return AuthorProfile(
+        userId = userId,
+        userName = detailUser.name.orEmpty(),
+        userAccount = detailUser.account.orEmpty(),
+        avatarUrl = detailUser.avatarUrl(),
+        comment = detailUser.comment.orEmpty(),
+        isFollowed = detailUser.isFollowed ?: false,
+        followingCount = profile?.totalFollowUsers ?: 0,
+        followerCount = profile?.totalFollower ?: 0,
+        myPixivCount = profile?.totalMyPixivUsers ?: 0,
+        totalIllusts = profile?.totalIllusts ?: 0,
+        totalManga = profile?.totalManga ?: 0,
+        totalBookmarks = profile?.totalIllustBookmarksPublic ?: 0,
+    )
+}
+
+fun UserPreviewDto.toDomain(): UserPreview? {
+    val previewUser = user ?: return null
+    val userId = previewUser.id ?: return null
+    return UserPreview(
+        userId = userId,
+        userName = previewUser.name.orEmpty(),
+        userAccount = previewUser.account.orEmpty(),
+        avatarUrl = previewUser.avatarUrl(),
+        comment = previewUser.comment.orEmpty(),
+        isFollowed = previewUser.isFollowed ?: false,
+        illusts = illusts.orEmpty().map { it.toDomain() },
     )
 }
 

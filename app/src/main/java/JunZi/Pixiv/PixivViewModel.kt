@@ -17,7 +17,9 @@ import androidx.lifecycle.viewModelScope
 import JunZi.Pixiv.data.PixivRepository
 import JunZi.Pixiv.data.auth.OAuthPkce
 import JunZi.Pixiv.data.auth.TokenStore
+import JunZi.Pixiv.data.local.HistoryStore
 import JunZi.Pixiv.data.model.AuthSession
+import JunZi.Pixiv.data.model.AuthorProfile
 import JunZi.Pixiv.data.model.BookmarkRestrict
 import JunZi.Pixiv.data.model.Illust
 import JunZi.Pixiv.data.model.IllustComment
@@ -29,10 +31,15 @@ import JunZi.Pixiv.data.model.TrendingTag
 import JunZi.Pixiv.data.model.UploadIllustRequest
 import JunZi.Pixiv.data.model.UploadImagePart
 import JunZi.Pixiv.data.model.UgoiraFrameImage
+import JunZi.Pixiv.data.model.UserPreview
+import JunZi.Pixiv.data.model.UserPreviewPage
 import JunZi.Pixiv.data.network.PixivApiException
 import JunZi.Pixiv.data.network.PixivImageProxy
 import JunZi.Pixiv.data.network.PixivNetworkConfig
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -49,6 +56,7 @@ enum class AppScreen {
     Me,
     Settings,
     Preview,
+    Author,
 }
 
 private fun AppScreen.defaultBackTarget(): AppScreen {
@@ -60,6 +68,7 @@ private fun AppScreen.defaultBackTarget(): AppScreen {
         AppScreen.Me -> AppScreen.Home
         AppScreen.Settings -> AppScreen.Me
         AppScreen.Preview -> AppScreen.Home
+        AppScreen.Author -> AppScreen.Home
     }
 }
 
@@ -80,11 +89,26 @@ enum class PreviewSwipeMode {
     Horizontal,
 }
 
+enum class UgoiraSaveFormat(val extension: String, val mimeType: String) {
+    GIF("gif", "image/gif"),
+    WEBP("webp", "image/webp"),
+}
+
 enum class DownloadStatus {
     Queued,
     Running,
     Finished,
     Failed,
+}
+
+enum class AuthorWorkTab(val apiValue: String) {
+    Illust("illust"),
+    Manga("manga"),
+}
+
+enum class FollowUserFeed {
+    Public,
+    Private,
 }
 
 @Immutable
@@ -123,9 +147,22 @@ data class DiscoverState(
 )
 
 @Immutable
+data class UserPreviewFeedState(
+    val items: List<UserPreview> = emptyList(),
+    val nextUrl: String? = null,
+    val isLoading: Boolean = false,
+    val error: String? = null,
+)
+
+@Immutable
 data class MyState(
     val works: FeedState = FeedState(),
     val bookmarks: FeedState = FeedState(),
+    val publicFollowing: UserPreviewFeedState = UserPreviewFeedState(),
+    val privateFollowing: UserPreviewFeedState = UserPreviewFeedState(),
+    val followCount: Int = 0,
+    val followerCount: Int = 0,
+    val hasMoreFollowers: Boolean = false,
     val hasLoaded: Boolean = false,
     val isUploading: Boolean = false,
     val uploadStatus: String? = null,
@@ -136,11 +173,19 @@ data class DownloadItem(
     val key: String,
     val illustId: Long,
     val title: String,
+    val illust: Illust? = null,
     val fileName: String,
     val status: DownloadStatus,
+    val isUgoira: Boolean = false,
+    val pageCount: Int = 1,
+    val relativePath: String = "",
     val detail: String = "",
     val savedUri: String? = null,
+    val savedUris: List<String> = emptyList(),
+    val zipSavedUri: String? = null,
 )
+
+private const val HISTORY_PAGE_SIZE = 20
 
 @Immutable
 data class DownloadState(
@@ -158,6 +203,42 @@ data class CommentState(
 )
 
 @Immutable
+data class HistoryItem(
+    val illust: Illust,
+    val viewedAtMillis: Long,
+)
+
+@Immutable
+data class HistoryState(
+    val items: List<HistoryItem> = emptyList(),
+    val isLoading: Boolean = false,
+    val error: String? = null,
+    val nextOffset: Int = 0,
+    val hasMore: Boolean = false,
+)
+
+@Immutable
+data class AuthorState(
+    val userId: Long? = null,
+    val userName: String = "",
+    val userAccount: String = "",
+    val userAvatarUrl: String? = null,
+    val userComment: String = "",
+    val isFollowed: Boolean = false,
+    val followerCount: Int = 0,
+    val myPixivCount: Int = 0,
+    val totalIllusts: Int = 0,
+    val totalManga: Int = 0,
+    val totalBookmarks: Int = 0,
+    val selectedTab: AuthorWorkTab = AuthorWorkTab.Illust,
+    val illusts: FeedState = FeedState(),
+    val manga: FeedState = FeedState(),
+    val isLoadingProfile: Boolean = false,
+    val isLoadingWorks: Boolean = false,
+    val isFollowBusy: Boolean = false,
+)
+
+@Immutable
 private data class PreviewSnapshot(
     val illust: Illust?,
     val selectedImageIndex: Int,
@@ -168,6 +249,13 @@ private data class PreviewSnapshot(
     val ugoiraTotalFrames: Int,
 )
 
+private data class DownloadWriteResult(
+    val mainUri: Uri,
+    val zipUri: Uri? = null,
+    val format: UgoiraSaveFormat? = null,
+    val savedUris: List<String> = emptyList(),
+)
+
 @Immutable
 data class PuxivUiState(
     val screen: AppScreen = AppScreen.Login,
@@ -176,6 +264,8 @@ data class PuxivUiState(
     val home: HomeState = HomeState(),
     val discover: DiscoverState = DiscoverState(),
     val mine: MyState = MyState(),
+    val history: HistoryState = HistoryState(),
+    val author: AuthorState = AuthorState(),
     val downloads: DownloadState = DownloadState(),
     val rankingMode: RankingMode = RankingMode.Day,
     val rankingDate: String = "",
@@ -204,7 +294,10 @@ data class PuxivUiState(
     val useHostIpRouting: Boolean = true,
     val useRemoteImageProxy: Boolean = false,
     val imageProxyInput: String = PixivImageProxy.DEFAULT_PROXY_ORIGIN,
+    val saveUgoiraZip: Boolean = false,
+    val filteredTagsInput: String = "",
     val useWaterfall: Boolean = true,
+    val ugoiraSaveFormat: UgoiraSaveFormat = UgoiraSaveFormat.WEBP,
     val isBusy: Boolean = false,
     val isTrendingLoading: Boolean = false,
     val isLoadingMore: Boolean = false,
@@ -214,7 +307,8 @@ data class PuxivUiState(
 
 class PixivViewModel(application: Application) : AndroidViewModel(application) {
     private val store = TokenStore(application)
-    private val repository = PixivRepository()
+    private val repository = PixivRepository(application)
+    private val historyStore = HistoryStore(application)
     private val _uiState = MutableStateFlow(PuxivUiState())
     private val connectivityManager = application.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
@@ -233,6 +327,10 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
         val useRemoteImageProxy = store.readUseRemoteImageProxy()
         val storedImageProxyOrigin = store.readImageProxyOrigin()
         val previewSwipeMode = store.readPreviewSwipeMode()
+        val saveUgoiraZip = store.readSaveUgoiraZip()
+        val filteredTagsInput = store.readFilteredTagsInput()
+        val storedUgoiraFormat = store.readUgoiraSaveFormat()
+        val ugoiraSaveFormat = UgoiraSaveFormat.entries.find { it.name == storedUgoiraFormat } ?: UgoiraSaveFormat.WEBP
         val imageProxyOrigin = storedImageProxyOrigin
             ?.takeIf { PixivImageProxy.setProxyOrigin(it) }
             ?.let { PixivImageProxy.proxyOrigin }
@@ -251,6 +349,9 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
                 useRemoteImageProxy = useRemoteImageProxy,
                 imageProxyInput = imageProxyOrigin,
                 previewSwipeMode = previewSwipeMode,
+                saveUgoiraZip = saveUgoiraZip,
+                filteredTagsInput = filteredTagsInput,
+                ugoiraSaveFormat = ugoiraSaveFormat,
             )
         }
         viewModelScope.launch {
@@ -395,6 +496,26 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(previewSwipeMode = mode) }
     }
 
+    fun updateSaveUgoiraZip(enabled: Boolean) {
+        store.saveSaveUgoiraZip(enabled)
+        _uiState.update {
+            it.copy(
+                saveUgoiraZip = enabled,
+                message = if (enabled) "下载动图时会额外保留 zip" else "下载动图时仅保留动图文件",
+            )
+        }
+    }
+
+    fun updateUgoiraSaveFormat(format: UgoiraSaveFormat) {
+        store.saveUgoiraSaveFormat(format.name)
+        _uiState.update {
+            it.copy(
+                ugoiraSaveFormat = format,
+                message = "动图保存格式已设置为 ${format.name}",
+            )
+        }
+    }
+
     fun updateImageProxyEnabled(enabled: Boolean) {
         PixivImageProxy.useRemoteProxy = enabled
         store.saveUseRemoteImageProxy(enabled)
@@ -427,6 +548,46 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun updateImageProxyInput(value: String) = _uiState.update { it.copy(imageProxyInput = value.trim()) }
+
+    fun updateFilteredTagsInput(value: String) {
+        _uiState.update { it.copy(filteredTagsInput = value) }
+    }
+
+    fun saveFilteredTags() {
+        val normalized = normalizeFilteredTagsInput(_uiState.value.filteredTagsInput)
+        store.saveFilteredTagsInput(normalized)
+        _uiState.update {
+            it.copy(
+                filteredTagsInput = normalized,
+                message = if (normalized.isBlank()) "已清空过滤标签" else "已保存过滤标签",
+            )
+        }
+        reloadFeedsAfterFilterChange()
+    }
+
+    private fun excludedTags(): Set<String> = _uiState.value.excludedTags()
+
+    private fun reloadFeedsAfterFilterChange() {
+        val state = _uiState.value
+        if (state.keyword.isNotBlank() && state.session != null) {
+            search()
+        }
+        if (state.home.hasLoaded) {
+            loadHome(refresh = true)
+        }
+        if (state.discover.hasLoaded && state.session != null) {
+            loadDiscover(refresh = true)
+        }
+        if (state.mine.hasLoaded) {
+            loadMine(refresh = true)
+        }
+        if (state.author.userId != null && state.session != null) {
+            loadAuthorWorks(refresh = true, tab = state.author.selectedTab)
+        }
+        if (state.selectedIllust != null && state.session != null) {
+            loadRelated(refresh = true)
+        }
+    }
 
     fun saveImageProxyOrigin() {
         val normalized = PixivImageProxy.normalizeProxyOrigin(_uiState.value.imageProxyInput)
@@ -671,12 +832,13 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     return@onSuccess
                 }
+                val filteredPage = page.filteredBy(excludedTags())
                 _uiState.update { state ->
                     state.copy(
                         home = state.home.withFeed(feed) { old ->
                             old.copy(
-                                items = if (refresh) page.items else old.items + page.items,
-                                nextUrl = page.nextUrl,
+                                items = if (refresh) filteredPage.items else old.items + filteredPage.items,
+                                nextUrl = filteredPage.nextUrl,
                                 isLoading = false,
                                 error = null,
                             )
@@ -740,12 +902,13 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     return@onSuccess
                 }
+                val filteredPage = page.filteredBy(excludedTags())
                 _uiState.update { currentState ->
                     currentState.copy(
                         discover = currentState.discover.withFeed(feed) { old ->
                             old.copy(
-                                items = if (refresh) page.items else old.items + page.items,
-                                nextUrl = page.nextUrl,
+                                items = if (refresh) filteredPage.items else old.items + filteredPage.items,
+                                nextUrl = filteredPage.nextUrl,
                                 isLoading = false,
                                 error = null,
                             )
@@ -767,16 +930,109 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
     fun loadMine(refresh: Boolean = false) {
         val state = _uiState.value
         if (state.session == null) {
+            loadHistory(refresh = refresh)
             return
         }
         if (state.session.userId == null) {
+            loadHistory(refresh = refresh)
             _uiState.update { it.copy(message = "当前会话缺少用户 ID，请用网页登录或授权 code 登录") }
             return
         }
         if (!refresh && state.mine.hasLoaded) return
         _uiState.update { it.copy(mine = it.mine.copy(hasLoaded = true)) }
+        loadMyProfile()
         loadMyWorks(refresh = true)
         loadMyBookmarks(refresh = true)
+        loadMyFollowing(FollowUserFeed.Public, refresh = true)
+        loadMyFollowing(FollowUserFeed.Private, refresh = true)
+        loadHistory(refresh = refresh)
+    }
+
+    fun loadMyProfile() {
+        val state = _uiState.value
+        val userId = state.session?.userId ?: return
+        viewModelScope.launch {
+            runCatching { withAccessToken { token -> repository.userDetail(userId, token) } }
+                .onSuccess { profile ->
+                    val followerPage = runCatching {
+                        withAccessToken { token -> repository.userFollowers(userId, token) }
+                    }.getOrNull()
+                    _uiState.update { current ->
+                        current.copy(
+                            mine = current.mine.copy(
+                                followCount = profile.followingCount,
+                                followerCount = profile.followerCount.takeIf { it > 0 }
+                                    ?: followerPage?.items?.size
+                                    ?: current.mine.followerCount,
+                                hasMoreFollowers = if (profile.followerCount > 0) {
+                                    false
+                                } else {
+                                    followerPage?.nextUrl != null
+                                },
+                            ),
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    _uiState.update { it.copy(message = error.readableMessage()) }
+                }
+        }
+    }
+
+    fun loadHistory(refresh: Boolean = false) {
+        val state = _uiState.value
+        if (state.history.isLoading) return
+        if (!refresh && state.history.items.isNotEmpty()) return
+        val accessToken = state.session?.accessToken
+        if (accessToken.isNullOrBlank()) {
+            _uiState.update {
+                it.copy(
+                    history = it.history.copy(
+                        items = emptyList(),
+                        isLoading = false,
+                        error = "登录后可查看历史作品",
+                    ),
+                )
+            }
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            loadHistoryPage(accessToken = accessToken, offset = 0, append = false)
+        }
+    }
+
+    fun loadMoreHistory() {
+        val state = _uiState.value
+        if (state.history.isLoading || !state.history.hasMore) return
+        val accessToken = state.session?.accessToken ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            loadHistoryPage(
+                accessToken = accessToken,
+                offset = state.history.nextOffset,
+                append = true,
+            )
+        }
+    }
+
+    fun clearHistory() {
+        viewModelScope.launch(Dispatchers.IO) {
+            historyStore.clear()
+            _uiState.update { it.copy(history = HistoryState()) }
+        }
+    }
+
+    fun deleteHistoryItem(illustId: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            historyStore.delete(illustId)
+            _uiState.update { state ->
+                state.copy(
+                    history = state.history.copy(
+                        items = state.history.items.filterNot { it.illust.id == illustId },
+                        nextOffset = (state.history.nextOffset - 1).coerceAtLeast(0),
+                    ),
+                )
+            }
+        }
     }
 
     fun loadMyWorks(refresh: Boolean = false) {
@@ -802,12 +1058,13 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
                     _uiState.update { it.copy(mine = it.mine.copy(works = it.mine.works.copy(isLoading = false))) }
                     return@onSuccess
                 }
+                val filteredPage = page.filteredBy(excludedTags())
                 _uiState.update { current ->
                     current.copy(
                         mine = current.mine.copy(
                             works = current.mine.works.copy(
-                                items = if (refresh) page.items else current.mine.works.items + page.items,
-                                nextUrl = page.nextUrl,
+                                items = if (refresh) filteredPage.items else current.mine.works.items + filteredPage.items,
+                                nextUrl = filteredPage.nextUrl,
                                 isLoading = false,
                                 error = null,
                             ),
@@ -849,12 +1106,13 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
                     _uiState.update { it.copy(mine = it.mine.copy(bookmarks = it.mine.bookmarks.copy(isLoading = false))) }
                     return@onSuccess
                 }
+                val filteredPage = page.filteredBy(excludedTags())
                 _uiState.update { current ->
                     current.copy(
                         mine = current.mine.copy(
                             bookmarks = current.mine.bookmarks.copy(
-                                items = if (refresh) page.items else current.mine.bookmarks.items + page.items,
-                                nextUrl = page.nextUrl,
+                                items = if (refresh) filteredPage.items else current.mine.bookmarks.items + filteredPage.items,
+                                nextUrl = filteredPage.nextUrl,
                                 isLoading = false,
                                 error = null,
                             ),
@@ -867,6 +1125,68 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
                         mine = current.mine.copy(
                             bookmarks = current.mine.bookmarks.copy(isLoading = false, error = error.readableMessage()),
                         ),
+                    )
+                }
+            }
+        }
+    }
+
+    fun loadMyFollowing(feed: FollowUserFeed, refresh: Boolean = false) {
+        val state = _uiState.value
+        val userId = state.session?.userId ?: return
+        val currentFeed = state.mine.following(feed)
+        if (currentFeed.isLoading) return
+        if (!refresh && currentFeed.items.isNotEmpty()) return
+
+        viewModelScope.launch {
+            _uiState.update { current ->
+                current.copy(
+                    mine = current.mine.withFollowing(feed) {
+                        it.copy(isLoading = true, error = null)
+                    },
+                )
+            }
+            runCatching {
+                withAccessToken { token ->
+                    if (refresh) {
+                        val restrict = when (feed) {
+                            FollowUserFeed.Public -> BookmarkRestrict.Public
+                            FollowUserFeed.Private -> BookmarkRestrict.Private
+                        }
+                        repository.userFollowing(userId, token, restrict)
+                    } else {
+                        val nextUrl = _uiState.value.mine.following(feed).nextUrl ?: return@withAccessToken null
+                        repository.nextUserPreviewsPage(nextUrl, token)
+                    }
+                }
+            }.onSuccess { page ->
+                if (page == null) {
+                    _uiState.update { current ->
+                        current.copy(
+                            mine = current.mine.withFollowing(feed) { it.copy(isLoading = false) },
+                        )
+                    }
+                    return@onSuccess
+                }
+                val filteredPage = page.filteredBy(excludedTags())
+                _uiState.update { current ->
+                    current.copy(
+                        mine = current.mine.withFollowing(feed) { old ->
+                            old.copy(
+                                items = if (refresh) filteredPage.items else old.items + filteredPage.items,
+                                nextUrl = filteredPage.nextUrl,
+                                isLoading = false,
+                                error = null,
+                            )
+                        },
+                    )
+                }
+            }.onFailure { error ->
+                _uiState.update { current ->
+                    current.copy(
+                        mine = current.mine.withFollowing(feed) {
+                            it.copy(isLoading = false, error = error.readableMessage())
+                        },
                     )
                 }
             }
@@ -993,6 +1313,7 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
                         bookmarkNum = bookmarkNum,
                     )
                 }
+                val filteredPage = page.filteredBy(excludedTags())
                 _uiState.update { current ->
                     if (
                         current.keyword.trim() != keyword ||
@@ -1004,7 +1325,7 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
                     ) {
                         current
                     } else {
-                        current.copy(items = page.items, nextUrl = page.nextUrl, message = null)
+                        current.copy(items = filteredPage.items, nextUrl = filteredPage.nextUrl, message = null)
                     }
                 }
             }
@@ -1021,10 +1342,11 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.update { it.copy(isLoadingMore = true, message = null) }
             runCatching { withAccessToken { repository.nextPage(nextUrl, it) } }
                 .onSuccess { page ->
+                    val filteredPage = page.filteredBy(excludedTags())
                     _uiState.update {
                         it.copy(
-                            items = it.items + page.items,
-                            nextUrl = page.nextUrl,
+                            items = it.items + filteredPage.items,
+                            nextUrl = filteredPage.nextUrl,
                             isLoadingMore = false,
                         )
                     }
@@ -1148,41 +1470,56 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        val jobs = if (illust.isUgoira) {
-            listOf(
-                DownloadItem(
-                    key = "${illust.id}-ugoira-${System.nanoTime()}",
-                    illustId = illust.id,
-                    title = illust.title,
-                    fileName = illust.safeDownloadBaseName("ugoira") + ".zip",
-                    status = DownloadStatus.Queued,
-                    detail = "等待下载动画 zip",
-                ),
-            )
-        } else {
-            pages.mapIndexed { index, url ->
-                DownloadItem(
-                    key = "${illust.id}-$index-${System.nanoTime()}",
-                    illustId = illust.id,
-                    title = illust.title,
-                    fileName = illust.safeDownloadBaseName((index + 1).toString().padStart(2, '0')) + url.fileExtension(),
-                    status = DownloadStatus.Queued,
-                    detail = "等待下载第 ${index + 1} 张",
+        val ugoiraFormat = _uiState.value.ugoiraSaveFormat
+        val job = DownloadItem(
+            key = "${illust.id}-${System.nanoTime()}",
+            illustId = illust.id,
+            title = illust.title,
+            illust = illust,
+            fileName = if (illust.isUgoira) {
+                "${illust.safeFolderName()}_动图.${ugoiraFormat.extension}"
+            } else {
+                illust.safeFolderName()
+            },
+            status = DownloadStatus.Queued,
+            isUgoira = illust.isUgoira,
+            pageCount = if (illust.isUgoira) 1 else pages.size,
+            relativePath = if (illust.isUgoira) {
+                buildDownloadRelativePath(
+                    rootDirectory = Environment.DIRECTORY_PICTURES,
+                    authorName = illust.authorName,
                 )
-            }
-        }
+            } else {
+                buildDownloadRelativePath(
+                    rootDirectory = Environment.DIRECTORY_PICTURES,
+                    authorName = illust.authorName,
+                    title = illust.title,
+                )
+            },
+            detail = if (illust.isUgoira) "等待合成 ${ugoiraFormat.name}" else "等待下载 ${pages.size} 张",
+        )
 
         _uiState.update { state ->
-            val downloads = state.downloads.copy(items = jobs + state.downloads.items)
+            val downloads = state.downloads.copy(items = listOf(job) + state.downloads.items.filterNot { it.illustId == illust.id })
             store.saveDownloads(downloads.items)
             state.copy(
                 downloads = downloads,
                 message = "已加入下载队列",
             )
         }
-        jobs.forEachIndexed { index, item ->
-            val url = pages.getOrNull(index)
-            startDownload(item, illust, url)
+        startDownload(job, illust)
+    }
+
+    fun deleteDownloadItem(key: String) {
+        _uiState.update { state ->
+            val downloads = state.downloads.copy(
+                items = state.downloads.items.filterNot { it.key == key },
+            )
+            store.saveDownloads(downloads.items)
+            state.copy(
+                downloads = downloads,
+                message = "已删除下载记录",
+            )
         }
     }
 
@@ -1278,6 +1615,322 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
         refreshPreviewDetail(illust)
+        saveHistory(illust)
+    }
+
+    fun openFullScreenPreviewForIllust(illust: Illust) {
+        openPreview(illust)
+        _uiState.update { it.copy(isFullScreenPreview = true) }
+    }
+
+    fun openDownloadedPreview(item: DownloadItem) {
+        val savedUris = item.savedUris.orEmpty()
+            .mapNotNull { it?.takeIf { value -> value.isNotBlank() } }
+            .ifEmpty { listOfNotNull(item.savedUri?.takeIf { it.isNotBlank() }) }
+        val firstSavedUri = savedUris.firstOrNull()
+        if (firstSavedUri == null) {
+            _uiState.update { it.copy(message = "没有可预览的本地文件") }
+            return
+        }
+        val localPages = savedUris.map {
+            JunZi.Pixiv.data.model.IllustImagePage(
+                url = it,
+                width = item.illust?.width ?: 1,
+                height = item.illust?.height ?: 1,
+            )
+        }
+        val sourceIllust = item.illust ?: Illust(
+            id = item.illustId,
+            title = item.title,
+            authorId = 0L,
+            authorName = "",
+            authorAccount = "",
+            authorAvatarUrl = null,
+            type = "illust",
+            caption = "",
+            previewUrl = firstSavedUri,
+            imageUrls = savedUris,
+            imagePages = localPages,
+            tags = emptyList(),
+            pageCount = savedUris.size,
+            width = item.illust?.width ?: 1,
+            height = item.illust?.height ?: 1,
+            totalBookmarks = 0,
+            totalView = 0,
+            isBookmarked = false,
+            aiType = null,
+            createDate = null,
+        )
+        val currentScreen = _uiState.value.screen
+        val returnScreen = currentScreen.takeIf { it != AppScreen.Preview } ?: _uiState.value.previewReturnScreen
+        val localIllust = sourceIllust.copy(
+            type = if (item.isUgoira) "illust" else sourceIllust.type,
+            previewUrl = firstSavedUri,
+            imageUrls = savedUris,
+            imagePages = savedUris.map {
+                JunZi.Pixiv.data.model.IllustImagePage(
+                    url = it,
+                    width = sourceIllust.width,
+                    height = sourceIllust.height,
+                )
+            },
+            pageCount = savedUris.size,
+        )
+        if (currentScreen == AppScreen.Preview) {
+            previewBackStack.addLast(_uiState.value.toPreviewSnapshot())
+        } else {
+            previewBackStack.clear()
+            pushBackStack(returnScreen)
+        }
+        _uiState.update {
+            it.copy(
+                selectedIllust = localIllust,
+                selectedImageIndex = 0,
+                related = FeedState(),
+                comments = CommentState(),
+                ugoiraFrames = emptyList(),
+                ugoiraLoadedFrames = 0,
+                ugoiraTotalFrames = 0,
+                isPreviewLoading = false,
+                isFullScreenPreview = false,
+                previewReturnScreen = returnScreen,
+                screen = AppScreen.Preview,
+                message = null,
+            )
+        }
+        if (item.illustId > 0L) {
+            loadRelatedFeed(item.illustId, refresh = true)
+            loadComments(item.illustId)
+            saveHistory(localIllust)
+        }
+    }
+
+    fun openPreviewById(illustId: Long, fullScreen: Boolean = false) {
+        val session = _uiState.value.session
+        if (session?.accessToken.isNullOrBlank()) {
+            requireLogin()
+            return
+        }
+        viewModelScope.launch {
+            runBusy {
+                val illust = withAccessToken { token -> repository.detail(illustId, token) }
+                openPreview(illust)
+                if (fullScreen) {
+                    _uiState.update { it.copy(isFullScreenPreview = true) }
+                }
+            }
+        }
+    }
+
+    fun openAuthor(illust: Illust) {
+        val authorId = illust.authorId.takeIf { it > 0L } ?: run {
+            _uiState.update { it.copy(message = "未找到作者信息") }
+            return
+        }
+        openAuthor(
+            userId = authorId,
+            userName = illust.authorName,
+            userAccount = illust.authorAccount,
+            userAvatarUrl = illust.authorAvatarUrl,
+        )
+    }
+
+    fun openAuthor(user: UserPreview) {
+        openAuthor(
+            userId = user.userId,
+            userName = user.userName,
+            userAccount = user.userAccount,
+            userAvatarUrl = user.avatarUrl,
+        )
+    }
+
+    private fun openAuthor(
+        userId: Long,
+        userName: String,
+        userAccount: String,
+        userAvatarUrl: String?,
+    ) {
+        if (_uiState.value.screen == AppScreen.Preview && backStack.lastOrNull() != AppScreen.Preview) {
+            backStack.addLast(AppScreen.Preview)
+        }
+        navigateTo(AppScreen.Author)
+        _uiState.update {
+            it.copy(
+                author = AuthorState(
+                    userId = userId,
+                    userName = userName,
+                    userAccount = userAccount,
+                    userAvatarUrl = userAvatarUrl,
+                    selectedTab = AuthorWorkTab.Illust,
+                ),
+                message = null,
+            )
+        }
+        loadAuthorProfile()
+        loadAuthorWorks(refresh = true, tab = AuthorWorkTab.Illust)
+    }
+
+    fun selectAuthorTab(tab: AuthorWorkTab) {
+        val current = _uiState.value.author
+        if (current.selectedTab == tab) return
+        _uiState.update { it.copy(author = it.author.copy(selectedTab = tab)) }
+        val feed = _uiState.value.author.feed(tab)
+        if (feed.items.isEmpty()) {
+            loadAuthorWorks(refresh = true, tab = tab)
+        }
+    }
+
+    fun loadAuthorProfile() {
+        val authorId = _uiState.value.author.userId ?: return
+        if (_uiState.value.session?.accessToken.isNullOrBlank()) return
+        if (_uiState.value.author.isLoadingProfile) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(author = it.author.copy(isLoadingProfile = true)) }
+            runCatching { withAccessToken { token -> repository.userDetail(authorId, token) } }
+                .onSuccess { profile ->
+                    if (_uiState.value.author.userId != authorId) return@onSuccess
+                    _uiState.update {
+                        it.copy(
+                            author = it.author.mergeProfile(profile).copy(isLoadingProfile = false),
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    if (_uiState.value.author.userId != authorId) return@onFailure
+                    _uiState.update {
+                        it.copy(
+                            author = it.author.copy(isLoadingProfile = false),
+                            message = error.readableMessage(),
+                        )
+                    }
+                }
+        }
+    }
+
+    fun loadAuthorWorks(refresh: Boolean = false, tab: AuthorWorkTab = _uiState.value.author.selectedTab) {
+        val state = _uiState.value
+        val authorId = state.author.userId ?: return
+        if (state.session?.accessToken.isNullOrBlank()) return
+        if (state.author.isLoadingWorks) return
+        if (!refresh && state.author.feed(tab).nextUrl == null) return
+
+        viewModelScope.launch {
+            _uiState.update { current ->
+                current.copy(
+                    author = current.author.copy(
+                        isLoadingWorks = true,
+                    ).withFeed(tab) { it.copy(error = null) },
+                )
+            }
+            runCatching {
+                withAccessToken { token ->
+                    if (refresh) {
+                        repository.userWorks(authorId, token, tab.apiValue)
+                    } else {
+                        val nextUrl = _uiState.value.author.feed(tab).nextUrl ?: return@withAccessToken null
+                        repository.nextPage(nextUrl, token)
+                    }
+                }
+            }.onSuccess { page ->
+                val currentAuthorId = _uiState.value.author.userId
+                if (currentAuthorId != authorId) return@onSuccess
+                if (page == null) {
+                    _uiState.update { it.copy(author = it.author.copy(isLoadingWorks = false)) }
+                    return@onSuccess
+                }
+                val filteredPage = page.filteredBy(excludedTags())
+                _uiState.update { current ->
+                    current.copy(
+                        author = current.author.copy(
+                            isLoadingWorks = false,
+                        ).withFeed(tab) { feed ->
+                            feed.copy(
+                                items = if (refresh) filteredPage.items else feed.items + filteredPage.items,
+                                nextUrl = filteredPage.nextUrl,
+                                isLoading = false,
+                                error = null,
+                            )
+                        },
+                    )
+                }
+            }.onFailure { error ->
+                if (_uiState.value.author.userId != authorId) return@onFailure
+                _uiState.update {
+                    it.copy(
+                        author = it.author.copy(isLoadingWorks = false).withFeed(tab) { feed ->
+                            feed.copy(error = error.readableMessage(), isLoading = false)
+                        },
+                        message = error.readableMessage(),
+                    )
+                }
+            }
+        }
+    }
+
+    fun followAuthor(restrict: BookmarkRestrict = BookmarkRestrict.Public) {
+        val authorId = _uiState.value.author.userId ?: return
+        if (_uiState.value.session?.accessToken.isNullOrBlank()) {
+            requireLogin()
+            return
+        }
+        if (_uiState.value.author.isFollowBusy) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(author = it.author.copy(isFollowBusy = true)) }
+            runCatching { withAccessToken { token -> repository.followUser(authorId, token, restrict) } }
+                .onSuccess {
+                    _uiState.update {
+                        it.copy(
+                            author = it.author.copy(
+                                isFollowBusy = false,
+                                isFollowed = true,
+                                followerCount = it.author.followerCount + 1,
+                            ),
+                            message = if (restrict == BookmarkRestrict.Private) "已悄悄关注作者" else "已关注作者",
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    _uiState.update {
+                        it.copy(
+                            author = it.author.copy(isFollowBusy = false),
+                            message = error.readableMessage(),
+                        )
+                    }
+                }
+        }
+    }
+
+    fun unfollowAuthor() {
+        val authorId = _uiState.value.author.userId ?: return
+        if (_uiState.value.session?.accessToken.isNullOrBlank()) {
+            requireLogin()
+            return
+        }
+        if (_uiState.value.author.isFollowBusy) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(author = it.author.copy(isFollowBusy = true)) }
+            runCatching { withAccessToken { token -> repository.unfollowUser(authorId, token) } }
+                .onSuccess {
+                    _uiState.update {
+                        it.copy(
+                            author = it.author.copy(
+                                isFollowBusy = false,
+                                isFollowed = false,
+                                followerCount = (it.author.followerCount - 1).coerceAtLeast(0),
+                            ),
+                            message = "已取消关注作者",
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    _uiState.update {
+                        it.copy(
+                            author = it.author.copy(isFollowBusy = false),
+                            message = error.readableMessage(),
+                        )
+                    }
+                }
+        }
     }
 
     fun selectImage(index: Int) {
@@ -1348,6 +2001,7 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
                 refreshTokenInput = "",
                 home = HomeState(),
                 mine = MyState(),
+                author = AuthorState(),
                 trendingTags = emptyList(),
                 discover = DiscoverState(),
                 items = emptyList(),
@@ -1389,6 +2043,7 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
             state.copy(
                 screen = target,
                 selectedIllust = if (current == AppScreen.Preview) null else state.selectedIllust,
+                author = if (current == AppScreen.Author && target != AppScreen.Preview) AuthorState() else state.author,
                 related = if (current == AppScreen.Preview) FeedState() else state.related,
                 comments = if (current == AppScreen.Preview) CommentState() else state.comments,
                 ugoiraFrames = if (current == AppScreen.Preview) emptyList() else state.ugoiraFrames,
@@ -1404,6 +2059,15 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
                 loadDiscover(refresh = false)
             }
             AppScreen.Me -> loadMine(refresh = false)
+            AppScreen.Author -> {
+                if (_uiState.value.author.userId != null) {
+                    loadAuthorProfile()
+                    loadAuthorWorks(
+                        refresh = _uiState.value.author.feed(_uiState.value.author.selectedTab).items.isEmpty(),
+                        tab = _uiState.value.author.selectedTab,
+                    )
+                }
+            }
             else -> Unit
         }
     }
@@ -1441,6 +2105,7 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
                 .onSuccess { detail ->
                     if (_uiState.value.selectedIllust?.id != illust.id) return@onSuccess
                     _uiState.update { it.copy(selectedIllust = detail, isPreviewLoading = detail.isUgoira) }
+                    saveHistory(detail)
                     loadRelatedFeed(detail.id, refresh = true)
                     loadComments(detail.id)
                     if (detail.isUgoira) {
@@ -1507,11 +2172,12 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
                     _uiState.update { it.copy(related = it.related.copy(isLoading = false)) }
                     return@onSuccess
                 }
+                val filteredPage = page.filteredBy(excludedTags())
                 _uiState.update { current ->
                     current.copy(
                         related = current.related.copy(
-                            items = if (refresh) page.items else current.related.items + page.items,
-                            nextUrl = page.nextUrl,
+                            items = if (refresh) filteredPage.items else current.related.items + filteredPage.items,
+                            nextUrl = filteredPage.nextUrl,
                             isLoading = false,
                             error = null,
                         ),
@@ -1561,26 +2227,106 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun startDownload(item: DownloadItem, illust: Illust, imageUrl: String?) {
-        viewModelScope.launch {
-            updateDownload(item.key) {
+    private fun startDownload(item: DownloadItem, illust: Illust) {
+        viewModelScope.launch(Dispatchers.IO) {
+            updateDownload(item.key, persist = false) {
                 it.copy(status = DownloadStatus.Running, detail = "下载中")
             }
             runCatching {
-                val bytes = if (illust.isUgoira) {
-                    withAccessToken { token ->
-                        repository.ugoiraZipBytes(illust.id, token)
+                if (illust.isUgoira) {
+                    val result = withAccessToken { token ->
+                        repository.downloadUgoira(
+                            id = illust.id,
+                            token = token,
+                            includeZip = _uiState.value.saveUgoiraZip,
+                            workingDirectory = getApplication<Application>().cacheDir,
+                            saveFormat = _uiState.value.ugoiraSaveFormat,
+                        ) { stage, current, total ->
+                            val detail = when {
+                                total > 0 -> "$stage $current/$total"
+                                else -> stage
+                            }
+                            updateDownload(item.key, persist = false) {
+                                it.copy(
+                                    status = DownloadStatus.Running,
+                                    detail = detail,
+                                )
+                            }
+                        }
                     }
+                    updateDownload(item.key, persist = false) {
+                        it.copy(
+                            status = DownloadStatus.Running,
+                            detail = "保存动图",
+                        )
+                    }
+                    val extension = result.format.extension
+                    val animatedFileName = item.fileName.substringBeforeLast('.') + ".$extension"
+                    val animatedUri = saveDownloadBytes(item.relativePath, animatedFileName, result.animatedBytes)
+                    val zipUri = result.zipBytes?.let { zipBytes ->
+                        updateDownload(item.key, persist = false) {
+                            it.copy(
+                                status = DownloadStatus.Running,
+                                detail = "保存 ZIP",
+                            )
+                        }
+                        saveDownloadBytes(
+                            buildDownloadRelativePath(
+                                rootDirectory = Environment.DIRECTORY_DOWNLOADS,
+                                authorName = illust.authorName,
+                                title = illust.title,
+                            ),
+                            "${illust.safeFolderName()}_原图.zip",
+                            zipBytes,
+                        )
+                    }
+                    DownloadWriteResult(
+                        mainUri = animatedUri,
+                        zipUri = zipUri,
+                        format = result.format,
+                        savedUris = listOf(animatedUri.toString()),
+                    )
                 } else {
-                    repository.downloadImageBytes(requireNotNull(imageUrl) { "缺少图片地址" })
+                    val pages = illust.imageUrls.ifEmpty { listOfNotNull(illust.previewUrl) }
+                    val savedUris = mutableListOf<Uri>()
+                    pages.forEachIndexed { index, imageUrl ->
+                        updateDownload(item.key, persist = false) {
+                            it.copy(
+                                status = DownloadStatus.Running,
+                                detail = "下载第 ${index + 1}/${pages.size} 张",
+                            )
+                        }
+                        val bytes = repository.downloadImageBytes(imageUrl)
+                        val savedUri = saveDownloadBytes(
+                            item.relativePath,
+                            "${(index + 1).toString().padStart(2, '0')}${imageUrl.fileExtension()}",
+                            bytes,
+                        )
+                        savedUris += savedUri
+                    }
+                    DownloadWriteResult(
+                        mainUri = requireNotNull(savedUris.firstOrNull()),
+                        savedUris = savedUris.map { it.toString() },
+                    )
                 }
-                saveDownloadBytes(item.fileName, bytes)
-            }.onSuccess { uri ->
+            }.onSuccess { result ->
                 updateDownload(item.key) {
                     it.copy(
                         status = DownloadStatus.Finished,
-                        detail = "已保存",
-                        savedUri = uri.toString(),
+                        fileName = if (illust.isUgoira && result.format != null) {
+                            item.fileName.substringBeforeLast('.') + ".${result.format.extension}"
+                        } else {
+                            item.fileName
+                        },
+                        detail = when {
+                            illust.isUgoira && result.zipUri != null -> "${result.format?.name ?: "动图"} 已保存，ZIP 已另存"
+                            illust.isUgoira -> "${result.format?.name ?: "动图"} 已保存"
+                            item.pageCount > 1 -> "已保存 ${item.pageCount} 张"
+                            else -> "已保存"
+                        },
+                        savedUri = result.mainUri.toString(),
+                        savedUris = result.savedUris.ifEmpty { listOf(result.mainUri.toString()) },
+                        zipSavedUri = result.zipUri?.toString(),
                     )
                 }
             }.onFailure { error ->
@@ -1591,38 +2337,52 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun updateDownload(key: String, transform: (DownloadItem) -> DownloadItem) {
+    private fun updateDownload(
+        key: String,
+        persist: Boolean = true,
+        transform: (DownloadItem) -> DownloadItem,
+    ) {
         _uiState.update { state ->
             val downloads = state.downloads.copy(
                 items = state.downloads.items.map { item ->
                     if (item.key == key) transform(item) else item
                 },
             )
-            store.saveDownloads(downloads.items)
+            if (persist) {
+                store.saveDownloads(downloads.items)
+            }
             state.copy(
                 downloads = downloads,
             )
         }
     }
 
-    private suspend fun saveDownloadBytes(fileName: String, bytes: ByteArray): Uri = withContext(Dispatchers.IO) {
+    private suspend fun saveDownloadBytes(relativePath: String, fileName: String, bytes: ByteArray): Uri = withContext(Dispatchers.IO) {
         val app = getApplication<Application>()
         val cleanFileName = fileName.ifBlank { "simple_pixiv_${System.currentTimeMillis()}.jpg" }
+        val cleanRelativePath = relativePath.ifBlank { Environment.DIRECTORY_PICTURES + "/IllustFerry" }
+        val mimeType = cleanFileName.mimeType()
+        val isImageTarget = mimeType.startsWith("image/")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val values = ContentValues().apply {
-                put(MediaStore.Downloads.DISPLAY_NAME, cleanFileName)
-                put(MediaStore.Downloads.MIME_TYPE, cleanFileName.mimeType())
-                put(MediaStore.Downloads.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/IllustFerry")
-                put(MediaStore.Downloads.IS_PENDING, 1)
+                put(MediaStore.MediaColumns.DISPLAY_NAME, cleanFileName)
+                put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                put(MediaStore.MediaColumns.RELATIVE_PATH, cleanRelativePath)
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
             }
             val resolver = app.contentResolver
-            val uri = requireNotNull(resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)) {
+            val collection = if (isImageTarget) {
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            } else {
+                MediaStore.Downloads.EXTERNAL_CONTENT_URI
+            }
+            val uri = requireNotNull(resolver.insert(collection, values)) {
                 "无法创建下载文件"
             }
             runCatching {
                 resolver.openOutputStream(uri)?.use { it.write(bytes) } ?: error("无法写入下载文件")
                 values.clear()
-                values.put(MediaStore.Downloads.IS_PENDING, 0)
+                values.put(MediaStore.MediaColumns.IS_PENDING, 0)
                 resolver.update(uri, values, null, null)
             }.onFailure {
                 resolver.delete(uri, null, null)
@@ -1631,8 +2391,8 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
             uri
         } else {
             val dir = File(
-                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-                "IllustFerry",
+                Environment.getExternalStoragePublicDirectory(cleanRelativePath.substringBefore('/')),
+                cleanRelativePath.substringAfter('/', ""),
             )
             if (!dir.exists() && !dir.mkdirs()) error("无法创建下载目录")
             val file = File(dir, cleanFileName)
@@ -1646,6 +2406,66 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
         runCatching { block() }
             .onFailure { error -> _uiState.update { it.copy(message = error.readableMessage()) } }
         _uiState.update { it.copy(isBusy = false) }
+    }
+
+    private fun saveHistory(illust: Illust) {
+        viewModelScope.launch(Dispatchers.IO) {
+            historyStore.save(illust.id)
+            val accessToken = _uiState.value.session?.accessToken
+            if (!accessToken.isNullOrBlank()) {
+                val entries = runCatching { historyStore.recentPage(limit = HISTORY_PAGE_SIZE, offset = 0) }.getOrDefault(emptyList())
+                val items = runCatching { loadHistoryItems(entries, accessToken) }.getOrNull()
+                if (items != null) {
+                    _uiState.update {
+                        it.copy(
+                            history = it.history.copy(
+                                items = items,
+                                isLoading = false,
+                                error = null,
+                                nextOffset = entries.size,
+                                hasMore = entries.size >= HISTORY_PAGE_SIZE,
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private suspend fun loadHistoryItems(entries: List<JunZi.Pixiv.data.local.HistoryEntry>, accessToken: String): List<HistoryItem> = coroutineScope {
+        entries.map { entry ->
+            async {
+                runCatching {
+                    HistoryItem(
+                        illust = repository.detail(entry.illustId, accessToken),
+                        viewedAtMillis = entry.viewedAtMillis,
+                    )
+                }.getOrNull()
+            }
+        }.awaitAll().filterNotNull()
+    }
+
+    private suspend fun loadHistoryPage(
+        accessToken: String,
+        offset: Int,
+        append: Boolean,
+    ) {
+        _uiState.update { it.copy(history = it.history.copy(isLoading = true, error = null)) }
+        val entriesResult = runCatching { historyStore.recentPage(limit = HISTORY_PAGE_SIZE, offset = offset) }
+        val entries = entriesResult.getOrDefault(emptyList())
+        val itemsResult = runCatching { loadHistoryItems(entries, accessToken) }
+        _uiState.update { state ->
+            val previousItems = if (append) state.history.items else emptyList()
+            state.copy(
+                history = state.history.copy(
+                    items = previousItems + itemsResult.getOrDefault(emptyList()),
+                    isLoading = false,
+                    error = entriesResult.exceptionOrNull()?.readableMessage() ?: itemsResult.exceptionOrNull()?.readableMessage(),
+                    nextOffset = offset + entries.size,
+                    hasMore = entries.size >= HISTORY_PAGE_SIZE,
+                ),
+            )
+        }
     }
 
     private suspend fun firstHomePage(
@@ -1744,6 +2564,7 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
                 home = state.home.withBookmarkState(illustId, isBookmarked),
                 discover = state.discover.withBookmarkState(illustId, isBookmarked),
                 mine = state.mine.withBookmarkState(illustId, isBookmarked),
+                author = state.author.withBookmarkState(illustId, isBookmarked),
                 items = state.items.withBookmarkState(illustId, isBookmarked),
                 selectedIllust = state.selectedIllust?.let {
                     if (it.id == illustId) it.withBookmarkState(isBookmarked) else it
@@ -1896,6 +2717,23 @@ private fun DiscoverState.withBookmarkState(illustId: Long, isBookmarked: Boolea
     )
 }
 
+private fun MyState.following(feed: FollowUserFeed): UserPreviewFeedState {
+    return when (feed) {
+        FollowUserFeed.Public -> publicFollowing
+        FollowUserFeed.Private -> privateFollowing
+    }
+}
+
+private fun MyState.withFollowing(
+    feed: FollowUserFeed,
+    transform: (UserPreviewFeedState) -> UserPreviewFeedState,
+): MyState {
+    return when (feed) {
+        FollowUserFeed.Public -> copy(publicFollowing = transform(publicFollowing))
+        FollowUserFeed.Private -> copy(privateFollowing = transform(privateFollowing))
+    }
+}
+
 private fun MyState.withBookmarkState(illustId: Long, isBookmarked: Boolean): MyState {
     val updatedBookmarks = if (isBookmarked) {
         bookmarks.withBookmarkState(illustId, isBookmarked)
@@ -1908,6 +2746,46 @@ private fun MyState.withBookmarkState(illustId: Long, isBookmarked: Boolean): My
     return copy(
         works = updatedWorks,
         bookmarks = updatedBookmarks,
+    )
+}
+
+private fun AuthorState.withBookmarkState(illustId: Long, isBookmarked: Boolean): AuthorState {
+    val updatedIllusts = illusts.withBookmarkState(illustId, isBookmarked)
+    val updatedManga = manga.withBookmarkState(illustId, isBookmarked)
+    if (updatedIllusts === illusts && updatedManga === manga) return this
+    return copy(
+        illusts = updatedIllusts,
+        manga = updatedManga,
+    )
+}
+
+private fun AuthorState.feed(tab: AuthorWorkTab): FeedState {
+    return when (tab) {
+        AuthorWorkTab.Illust -> illusts
+        AuthorWorkTab.Manga -> manga
+    }
+}
+
+private fun AuthorState.withFeed(tab: AuthorWorkTab, transform: (FeedState) -> FeedState): AuthorState {
+    return when (tab) {
+        AuthorWorkTab.Illust -> copy(illusts = transform(illusts))
+        AuthorWorkTab.Manga -> copy(manga = transform(manga))
+    }
+}
+
+private fun AuthorState.mergeProfile(profile: AuthorProfile): AuthorState {
+    return copy(
+        userId = profile.userId,
+        userName = profile.userName,
+        userAccount = profile.userAccount,
+        userAvatarUrl = profile.avatarUrl,
+        userComment = profile.comment,
+        isFollowed = profile.isFollowed,
+        followerCount = profile.followerCount,
+        myPixivCount = profile.myPixivCount,
+        totalIllusts = profile.totalIllusts,
+        totalManga = profile.totalManga,
+        totalBookmarks = profile.totalBookmarks,
     )
 }
 
@@ -1966,6 +2844,69 @@ private fun Illust.safeDownloadBaseName(suffix: String): String {
         .trim('_', ' ', '.')
         .ifBlank { "illust_$id" }
     return "${id}_${cleanTitle}_$suffix"
+}
+
+private fun Illust.safeFolderName(): String {
+    return title.sanitizeFileSegment(maxLength = 80).ifBlank { "illust_$id" }
+}
+
+private fun String.sanitizeFileSegment(maxLength: Int = 64): String {
+    return trim()
+        .replace(Regex("""[\\/:*?"<>|]"""), "_")
+        .replace(Regex("""\s+"""), " ")
+        .trim('_', ' ', '.')
+        .take(maxLength)
+        .ifBlank { "unknown" }
+}
+
+private fun buildDownloadRelativePath(
+    rootDirectory: String,
+    authorName: String,
+    title: String? = null,
+): String {
+    val authorSegment = authorName.sanitizeFileSegment()
+    val base = "$rootDirectory/IllustFerry/$authorSegment"
+    val titleSegment = title?.sanitizeFileSegment()
+    return if (titleSegment.isNullOrBlank()) base else "$base/$titleSegment"
+}
+
+private fun List<Illust>.filteredBy(excludedTags: Set<String>): List<Illust> {
+    if (excludedTags.isEmpty()) return this
+    return filterNot { illust ->
+        illust.tags.any { tag ->
+            excludedTags.contains(tag.trim().trimStart('#').lowercase(Locale.ROOT))
+        }
+    }
+}
+
+private fun IllustPage.filteredBy(excludedTags: Set<String>): IllustPage {
+    if (excludedTags.isEmpty()) return this
+    return copy(items = items.filteredBy(excludedTags))
+}
+
+private fun UserPreviewPage.filteredBy(excludedTags: Set<String>): UserPreviewPage {
+    if (excludedTags.isEmpty()) return this
+    return copy(
+        items = items.mapNotNull { user ->
+            val filteredIllusts = user.illusts.filteredBy(excludedTags)
+            if (filteredIllusts.isEmpty() && user.illusts.isNotEmpty()) null else user.copy(illusts = filteredIllusts)
+        },
+    )
+}
+
+private fun normalizeFilteredTagsInput(value: String): String {
+    return value.split(',')
+        .map { it.trim().trimStart('#') }
+        .filter { it.isNotBlank() }
+        .distinctBy { it.lowercase(Locale.ROOT) }
+        .joinToString(",")
+}
+
+private fun PuxivUiState.excludedTags(): Set<String> {
+    return filteredTagsInput.split(',')
+        .map { it.trim().trimStart('#').lowercase(Locale.ROOT) }
+        .filter { it.isNotBlank() }
+        .toSet()
 }
 
 private fun Illust.previewImageCount(): Int = imageUrls.ifEmpty { listOfNotNull(previewUrl) }.size
