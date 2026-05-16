@@ -45,6 +45,28 @@ data class IllustDetailResponse(
     @SerializedName("illust") val illust: IllustDto? = null,
 )
 
+data class BookmarkTagsResponse(
+    @SerializedName("bookmark_tags") val bookmarkTags: List<BookmarkTagDto>? = null,
+    @SerializedName("next_url") val nextUrl: String? = null,
+)
+
+data class IllustBookmarkDetailResponse(
+    @SerializedName("bookmark_detail") val bookmarkDetail: IllustBookmarkDetailDto? = null,
+)
+
+data class IllustBookmarkDetailDto(
+    @SerializedName("is_bookmarked") val isBookmarked: Boolean? = null,
+    @SerializedName("is_registered") val isRegistered: Boolean? = null,
+    @SerializedName("restrict") val restrict: String? = null,
+    @SerializedName("tags") val tags: List<BookmarkTagDto>? = null,
+)
+
+data class BookmarkTagDto(
+    @SerializedName("name") val name: String? = null,
+    @SerializedName("count") val count: Int? = null,
+    @SerializedName("is_registered") val isRegistered: Boolean? = null,
+)
+
 data class UserDetailResponse(
     @SerializedName("user") val user: UserDto? = null,
     @SerializedName("profile") val profile: UserProfileDto? = null,
@@ -346,6 +368,19 @@ data class UserPreviewPage(
     val nextUrl: String?,
 )
 
+@Immutable
+data class BookmarkTag(
+    val name: String,
+    val count: Int,
+)
+
+@Immutable
+data class IllustBookmarkDetail(
+    val isBookmarked: Boolean,
+    val restrict: BookmarkRestrict,
+    val tags: List<String>,
+)
+
 data class UploadImagePart(
     val bytes: ByteArray,
     val mimeType: String,
@@ -420,6 +455,24 @@ fun TrendingTagDto.toDomain(): TrendingTag? {
         name = name,
         translatedName = translatedName,
         previewUrl = illust?.toDomain()?.previewUrl,
+    )
+}
+
+fun BookmarkTagDto.toDomain(): BookmarkTag? {
+    val normalizedName = name?.trim()?.trimStart('#')?.takeIf { it.isNotBlank() } ?: return null
+    return BookmarkTag(name = normalizedName, count = count ?: 0)
+}
+
+fun IllustBookmarkDetailDto.toDomain(): IllustBookmarkDetail {
+    val restrictValue = restrict?.lowercase()
+    return IllustBookmarkDetail(
+        isBookmarked = isRegistered ?: isBookmarked ?: false,
+        restrict = BookmarkRestrict.entries.firstOrNull { it.apiValue == restrictValue } ?: BookmarkRestrict.Public,
+        tags = tags.orEmpty()
+            .filter { it.isRegistered == true }
+            .mapNotNull { it.name?.trim()?.trimStart('#')?.takeIf(String::isNotBlank) }
+            .distinctBy { it.lowercase() }
+            .take(10),
     )
 }
 

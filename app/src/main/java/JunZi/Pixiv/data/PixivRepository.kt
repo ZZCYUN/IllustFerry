@@ -7,7 +7,9 @@ import JunZi.Pixiv.UgoiraSaveFormat
 import JunZi.Pixiv.data.model.AuthSession
 import JunZi.Pixiv.data.model.AuthorProfile
 import JunZi.Pixiv.data.model.BookmarkRestrict
+import JunZi.Pixiv.data.model.BookmarkTag
 import JunZi.Pixiv.data.model.Illust
+import JunZi.Pixiv.data.model.IllustBookmarkDetail
 import JunZi.Pixiv.data.model.IllustCommentPage
 import JunZi.Pixiv.data.model.IllustPage
 import JunZi.Pixiv.data.model.RankingMode
@@ -155,9 +157,19 @@ class PixivRepository(
         userId: Long,
         token: String,
         restrict: BookmarkRestrict = BookmarkRestrict.Public,
+        tag: String? = null,
     ): IllustPage {
-        val response = api.bookmarkedIllusts(userId, token, restrict.apiValue)
+        val response = api.bookmarkedIllusts(userId, token, restrict.apiValue, tag)
         return IllustPage(response.illusts.orEmpty().map { it.toDomain() }, response.nextUrl)
+    }
+
+    suspend fun bookmarkTags(
+        userId: Long,
+        token: String,
+        restrict: BookmarkRestrict = BookmarkRestrict.Public,
+    ): List<BookmarkTag> {
+        val response = api.bookmarkTagsIllust(userId, token, restrict.apiValue)
+        return response.bookmarkTags.orEmpty().mapNotNull { it.toDomain() }
     }
 
     suspend fun nextPage(nextUrl: String, token: String): IllustPage {
@@ -167,6 +179,11 @@ class PixivRepository(
 
     suspend fun detail(id: Long, token: String): Illust {
         return requireNotNull(api.illustDetail(id, token).illust?.toDomain()) { "Illust not found" }
+    }
+
+    suspend fun bookmarkDetail(id: Long, token: String): IllustBookmarkDetail {
+        return api.illustBookmarkDetail(id, token).bookmarkDetail?.toDomain()
+            ?: IllustBookmarkDetail(isBookmarked = false, restrict = BookmarkRestrict.Public, tags = emptyList())
     }
 
     suspend fun userDetail(userId: Long, token: String): AuthorProfile {
@@ -206,8 +223,13 @@ class PixivRepository(
         api.addIllustComment(id, comment.trim(), token)
     }
 
-    suspend fun addBookmark(id: Long, token: String, restrict: BookmarkRestrict = BookmarkRestrict.Public) {
-        api.addIllustBookmark(id, token, restrict.apiValue)
+    suspend fun addBookmark(
+        id: Long,
+        token: String,
+        restrict: BookmarkRestrict = BookmarkRestrict.Public,
+        tags: List<String> = emptyList(),
+    ) {
+        api.addIllustBookmark(id, token, restrict.apiValue, tags)
     }
 
     suspend fun deleteBookmark(id: Long, token: String) {

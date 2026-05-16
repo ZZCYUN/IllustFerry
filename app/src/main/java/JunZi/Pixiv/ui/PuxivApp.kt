@@ -3,6 +3,7 @@ package JunZi.Pixiv.ui
 import JunZi.Pixiv.AppScreen
 import JunZi.Pixiv.AuthorWorkTab
 import JunZi.Pixiv.AuthorState
+import JunZi.Pixiv.BookmarkFeed
 import JunZi.Pixiv.CommentState
 import JunZi.Pixiv.DiscoverFeed
 import JunZi.Pixiv.DiscoverState
@@ -22,9 +23,11 @@ import JunZi.Pixiv.PuxivThemeMode
 import JunZi.Pixiv.PuxivThemePalette
 import JunZi.Pixiv.UgoiraSaveFormat
 import JunZi.Pixiv.PuxivUiState
+import JunZi.Pixiv.SelectedBookmarkState
 import JunZi.Pixiv.UserPreviewFeedState
 import JunZi.Pixiv.data.model.AuthSession
 import JunZi.Pixiv.data.model.BookmarkRestrict
+import JunZi.Pixiv.data.model.BookmarkTag
 import JunZi.Pixiv.data.model.Illust
 import JunZi.Pixiv.data.model.IllustImagePage
 import JunZi.Pixiv.data.model.UserPreview
@@ -127,6 +130,8 @@ import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.automirrored.filled.NavigateBefore
 import androidx.compose.material.icons.automirrored.filled.NavigateNext
 import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.CollectionsBookmark
@@ -137,6 +142,8 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.LocalOffer
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
@@ -361,7 +368,26 @@ fun PuxivApp(viewModel: PixivViewModel) {
                                 state = state,
                                 onBack = viewModel::goBack,
                                 onSelectImage = viewModel::selectImage,
-                                onToggleBookmark = viewModel::toggleSelectedBookmark,
+                                bookmarkTags = state.mine.bookmarkTags(),
+                                areBookmarkTagsLoaded = state.mine.hasBookmarkTagsLoaded,
+                                selectedBookmark = state.selectedBookmark,
+                                onBookmarkPublic = { tags ->
+                                    viewModel.bookmarkSelected(
+                                        restrict = BookmarkRestrict.Public,
+                                        tags = tags,
+                                    )
+                                },
+                                onBookmarkPrivate = { tags ->
+                                    viewModel.bookmarkSelected(
+                                        restrict = BookmarkRestrict.Private,
+                                        tags = tags,
+                                    )
+                                },
+                                onAddBookmarkTags = viewModel::addTagsToSelectedBookmark,
+                                onToggleBookmarkTag = viewModel::toggleSelectedBookmarkTag,
+                                onDeleteBookmark = viewModel::deleteSelectedBookmark,
+                                onLoadBookmarkDetail = { id, force -> viewModel.loadSelectedBookmarkDetail(id, force) },
+                                onLoadBookmarkTags = { viewModel.loadMyBookmarkTags(refresh = false) },
                                 onLoadRelated = { viewModel.loadRelated(refresh = false) },
                                 onOpenPreview = viewModel::openPreview,
                                 onOpenFullScreen = viewModel::openFullScreenPreview,
@@ -569,10 +595,11 @@ private fun MainShell(
                         contentPadding = padding,
                         onLoadMine = { viewModel.loadMine(refresh = true) },
                         onLoadWorks = { viewModel.loadMyWorks(refresh = true) },
-                        onLoadBookmarks = { viewModel.loadMyBookmarks(refresh = true) },
+                        onLoadBookmarks = { feed, tag -> viewModel.loadMyBookmarks(feed, tag, refresh = true) },
+                        onLoadBookmarkTags = { viewModel.loadMyBookmarkTags(refresh = true) },
                         onLoadHistory = { viewModel.loadHistory(refresh = true) },
                         onLoadMoreWorks = { viewModel.loadMyWorks(refresh = false) },
-                        onLoadMoreBookmarks = { viewModel.loadMyBookmarks(refresh = false) },
+                        onLoadMoreBookmarks = { feed, tag -> viewModel.loadMyBookmarks(feed, tag, refresh = false) },
                         onLoadMoreHistory = viewModel::loadMoreHistory,
                         onLoadFollowing = { viewModel.loadMyFollowing(it, refresh = true) },
                         onLoadMoreFollowing = { viewModel.loadMyFollowing(it, refresh = false) },
@@ -1440,7 +1467,7 @@ private fun SectionHeader(
     modifier: Modifier = Modifier,
     title: String,
     count: Int,
-    countLabel: String = "$count works",
+    countLabel: String? = "$count works",
     isLoading: Boolean,
     onRefresh: () -> Unit,
     actionLabel: String? = null,
@@ -1458,11 +1485,13 @@ private fun SectionHeader(
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
             )
-            Text(
-                text = countLabel,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            countLabel?.takeIf { it.isNotBlank() }?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
         if (actionLabel != null) {
             Surface(
@@ -1687,10 +1716,11 @@ private fun MeScreen(
     contentPadding: PaddingValues,
     onLoadMine: () -> Unit,
     onLoadWorks: () -> Unit,
-    onLoadBookmarks: () -> Unit,
+    onLoadBookmarks: (BookmarkFeed, String?) -> Unit,
+    onLoadBookmarkTags: () -> Unit,
     onLoadHistory: () -> Unit,
     onLoadMoreWorks: () -> Unit,
-    onLoadMoreBookmarks: () -> Unit,
+    onLoadMoreBookmarks: (BookmarkFeed, String?) -> Unit,
     onLoadMoreHistory: () -> Unit,
     onLoadFollowing: (FollowUserFeed) -> Unit,
     onLoadMoreFollowing: (FollowUserFeed) -> Unit,
@@ -1707,6 +1737,9 @@ private fun MeScreen(
     onStartWebLogin: () -> Unit,
 ) {
     var selectedTab by remember { mutableStateOf(MyTab.Works) }
+    var selectedBookmarkFeed by remember { mutableStateOf(BookmarkFeed.Public) }
+    var selectedBookmarkTag by remember { mutableStateOf<String?>(null) }
+    var selectedFollowingFeed by remember { mutableStateOf(FollowUserFeed.Public) }
     var showLoginDialog by remember { mutableStateOf(false) }
     var pendingDeleteHistory by remember { mutableStateOf<HistoryItem?>(null) }
     var pendingDeleteDownload by remember { mutableStateOf<DownloadItem?>(null) }
@@ -1716,6 +1749,17 @@ private fun MeScreen(
     LaunchedEffect(isActive, session?.userId, mine.hasLoaded) {
         if (isActive && session?.userId != null && !mine.hasLoaded) {
             onLoadMine()
+        }
+    }
+
+    val visibleBookmarkTags = mine.bookmarkTags(selectedBookmarkFeed).map { it.name }
+    LaunchedEffect(visibleBookmarkTags, selectedBookmarkFeed) {
+        val selectedTag = selectedBookmarkTag
+        if (selectedTag != null && visibleBookmarkTags.none { it.equals(selectedTag, ignoreCase = true) }) {
+            selectedBookmarkTag = null
+            if (selectedTab == MyTab.Bookmarks && session != null) {
+                onLoadBookmarks(selectedBookmarkFeed, null)
+            }
         }
     }
 
@@ -1757,9 +1801,6 @@ private fun MeScreen(
             item(span = StaggeredGridItemSpan.FullLine) {
                 MyHeader(
                     session = session,
-                    worksCount = mine.works.items.size,
-                    bookmarksCount = mine.bookmarks.items.size,
-                    followCount = mine.followCount,
                     followerCount = mine.followerCount,
                     hasMoreFollowers = mine.hasMoreFollowers,
                     downloadsCount = downloads.size,
@@ -1785,11 +1826,23 @@ private fun MeScreen(
                         selectedTab = tab
                         when (tab) {
                             MyTab.Works -> if (mine.works.items.isEmpty()) onLoadWorks()
-                            MyTab.Bookmarks -> if (mine.bookmarks.items.isEmpty()) onLoadBookmarks()
+                            MyTab.Bookmarks -> {
+                                if (
+                                    !mine.hasBookmarkTagsLoaded &&
+                                    !mine.isBookmarkTagsLoading
+                                ) {
+                                    onLoadBookmarkTags()
+                                }
+                                val feed = mine.bookmarkFeed(selectedBookmarkFeed)
+                                if (feed.items.isEmpty() || feed.queryTag != selectedBookmarkTag) {
+                                    onLoadBookmarks(selectedBookmarkFeed, selectedBookmarkTag)
+                                }
+                            }
                             MyTab.History -> if (history.items.isEmpty()) onLoadHistory()
                             MyTab.Following -> {
-                                if (mine.publicFollowing.items.isEmpty()) onLoadFollowing(FollowUserFeed.Public)
-                                if (mine.privateFollowing.items.isEmpty()) onLoadFollowing(FollowUserFeed.Private)
+                                if (mine.followingFeed(selectedFollowingFeed).items.isEmpty()) {
+                                    onLoadFollowing(selectedFollowingFeed)
+                                }
                             }
                             MyTab.Downloads -> Unit
                             MyTab.Upload -> Unit
@@ -1819,11 +1872,40 @@ private fun MeScreen(
                 }
 
                 MyTab.Bookmarks -> {
-                    val feed = mine.bookmarks
-                    mineFeedMessages(feed, "还没有加载到收藏作品")
+                    item(span = StaggeredGridItemSpan.FullLine) {
+                        BookmarkCollectionPanel(
+                            mine = mine,
+                            selectedFeed = selectedBookmarkFeed,
+                            selectedTag = selectedBookmarkTag,
+                            onSelectFeed = { feed ->
+                                selectedBookmarkFeed = feed
+                                if (
+                                    !mine.hasBookmarkTagsLoaded &&
+                                    !mine.isBookmarkTagsLoading
+                                ) {
+                                    onLoadBookmarkTags()
+                                }
+                                onLoadBookmarks(feed, selectedBookmarkTag)
+                            },
+                            onSelectTag = { tag ->
+                                selectedBookmarkTag = tag
+                                onLoadBookmarks(selectedBookmarkFeed, tag)
+                            },
+                            onRefreshTags = onLoadBookmarkTags,
+                        )
+                    }
+                    val feed = mine.bookmarkFeed(selectedBookmarkFeed)
+                    mineFeedMessages(
+                        feed = feed,
+                        emptyText = if (selectedBookmarkFeed == BookmarkFeed.Private) {
+                            "还没有私密收藏"
+                        } else {
+                            "还没有收藏作品"
+                        },
+                    )
                     items(
                         feed.items,
-                        key = { "mine-bookmark-${it.id}" },
+                        key = { "mine-bookmark-${selectedBookmarkFeed.name}-${selectedBookmarkTag.orEmpty()}-${it.id}" },
                         contentType = { "illust-card" },
                     ) { illust ->
                         IllustCard(
@@ -1833,7 +1915,10 @@ private fun MeScreen(
                         )
                     }
                     item(span = StaggeredGridItemSpan.FullLine) {
-                        MinePagingFooter(feed = feed, onLoadMore = onLoadMoreBookmarks)
+                        MinePagingFooter(
+                            feed = feed,
+                            onLoadMore = { onLoadMoreBookmarks(selectedBookmarkFeed, selectedBookmarkTag) },
+                        )
                     }
                 }
 
@@ -1932,6 +2017,11 @@ private fun MeScreen(
                         FollowingUsersPanel(
                             publicFollowing = mine.publicFollowing,
                             privateFollowing = mine.privateFollowing,
+                            selectedFeed = selectedFollowingFeed,
+                            onSelectFeed = { feed ->
+                                selectedFollowingFeed = feed
+                                if (mine.followingFeed(feed).items.isEmpty()) onLoadFollowing(feed)
+                            },
                             onRefresh = onLoadFollowing,
                             onLoadMore = onLoadMoreFollowing,
                             onOpenAuthor = onOpenAuthor,
@@ -2082,9 +2172,6 @@ private fun LazyStaggeredGridScope.mineFeedMessages(
 @Composable
 private fun MyHeader(
     session: AuthSession?,
-    worksCount: Int,
-    bookmarksCount: Int,
-    followCount: Int,
     followerCount: Int,
     hasMoreFollowers: Boolean,
     downloadsCount: Int,
@@ -2148,9 +2235,9 @@ private fun MyHeader(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                MetadataPill("$worksCount 作品")
-                MetadataPill("$bookmarksCount 收藏")
-                MetadataPill("$followCount 关注")
+                MetadataPill("作品")
+                MetadataPill("收藏")
+                MetadataPill("关注")
                 MetadataPill("${followerCount}${if (hasMoreFollowers) "+" else ""} 粉丝")
                 MetadataPill("$downloadsCount 下载")
                 if (isUploading) MetadataPill("投稿中")
@@ -2237,6 +2324,180 @@ private fun MyTabRow(
 }
 
 @Composable
+private fun BookmarkCollectionPanel(
+    mine: MyState,
+    selectedFeed: BookmarkFeed,
+    selectedTag: String?,
+    onSelectFeed: (BookmarkFeed) -> Unit,
+    onSelectTag: (String?) -> Unit,
+    onRefreshTags: () -> Unit,
+) {
+    val currentFeed = mine.bookmarkFeed(selectedFeed)
+    val accountTags = mine.bookmarkTags(selectedFeed)
+    val filterTags = accountTags.map { it.name }
+        .distinctBy { it.lowercase() }
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Column(
+            modifier = Modifier.padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.CollectionsBookmark,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = "收藏",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                        text = selectedTag?.let { "#$it" } ?: "全部标签",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (currentFeed.isLoading || mine.isBookmarkTagsLoading) {
+                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                }
+                IconButton(
+                    onClick = onRefreshTags,
+                    enabled = !mine.isBookmarkTagsLoading,
+                    modifier = Modifier.size(36.dp),
+                ) {
+                    Icon(Icons.Default.Refresh, contentDescription = "刷新收藏标签", modifier = Modifier.size(18.dp))
+                }
+            }
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                BookmarkFeed.entries.forEach { feed ->
+                    FilterChip(
+                        selected = selectedFeed == feed,
+                        onClick = { onSelectFeed(feed) },
+                        label = { Text(feed.label) },
+                        leadingIcon = {
+                            Icon(feed.icon, contentDescription = null, modifier = Modifier.size(18.dp))
+                        },
+                    )
+                }
+            }
+            LazyRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(34.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                contentPadding = PaddingValues(end = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                item(key = "all-bookmark-tags") {
+                    BookmarkTagChip(
+                        tag = "全部标签",
+                        isAll = true,
+                        isAccountTag = true,
+                        selected = selectedTag == null,
+                        onClick = { onSelectTag(null) },
+                        onRemove = null,
+                    )
+                }
+                lazyRowItems(filterTags, key = { it }) { tag ->
+                    BookmarkTagChip(
+                        tag = tag,
+                        isAll = false,
+                        isAccountTag = true,
+                        selected = selectedTag?.equals(tag, ignoreCase = true) == true,
+                        onClick = { onSelectTag(tag) },
+                        onRemove = null,
+                    )
+                }
+            }
+            mine.bookmarkTagsError?.takeIf { it.isNotBlank() }?.let { error ->
+                Text(
+                    text = "账号标签加载失败：$error",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun BookmarkTagChip(
+    tag: String,
+    isAll: Boolean,
+    isAccountTag: Boolean,
+    selected: Boolean,
+    onClick: () -> Unit,
+    onRemove: (() -> Unit)?,
+) {
+    Surface(
+        modifier = Modifier
+            .height(32.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(8.dp),
+        color = if (selected) {
+            MaterialTheme.colorScheme.secondaryContainer
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant
+        },
+        contentColor = if (selected) {
+            MaterialTheme.colorScheme.onSecondaryContainer
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        },
+        border = BorderStroke(
+            1.dp,
+            if (selected) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.outlineVariant,
+        ),
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 9.dp, end = if (!isAccountTag && onRemove != null) 3.dp else 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            if (!isAll) {
+                Icon(Icons.Default.LocalOffer, contentDescription = null, modifier = Modifier.size(14.dp))
+            }
+            Text(
+                text = if (isAll) tag else "#$tag",
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (!isAccountTag && onRemove != null) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "移除收藏标签",
+                    modifier = Modifier
+                        .size(20.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable(onClick = onRemove)
+                        .padding(3.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun MinePagingFooter(
     feed: FeedState,
     onLoadMore: () -> Unit,
@@ -2267,10 +2528,16 @@ private fun MinePagingFooter(
 private fun FollowingUsersPanel(
     publicFollowing: UserPreviewFeedState,
     privateFollowing: UserPreviewFeedState,
+    selectedFeed: FollowUserFeed,
+    onSelectFeed: (FollowUserFeed) -> Unit,
     onRefresh: (FollowUserFeed) -> Unit,
     onLoadMore: (FollowUserFeed) -> Unit,
     onOpenAuthor: (UserPreview) -> Unit,
 ) {
+    val feed = when (selectedFeed) {
+        FollowUserFeed.Public -> publicFollowing
+        FollowUserFeed.Private -> privateFollowing
+    }
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(8.dp),
@@ -2279,22 +2546,29 @@ private fun FollowingUsersPanel(
     ) {
         Column(
             modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                FollowUserFeed.entries.forEach { tab ->
+                    FilterChip(
+                        selected = selectedFeed == tab,
+                        onClick = { onSelectFeed(tab) },
+                        label = { Text(tab.label) },
+                        leadingIcon = {
+                            Icon(tab.icon, contentDescription = null, modifier = Modifier.size(18.dp))
+                        },
+                    )
+                }
+            }
             FollowingUserSection(
-                title = "关注的人",
-                feed = publicFollowing,
-                emptyText = "还没有公开关注",
-                onRefresh = { onRefresh(FollowUserFeed.Public) },
-                onLoadMore = { onLoadMore(FollowUserFeed.Public) },
-                onOpenAuthor = onOpenAuthor,
-            )
-            FollowingUserSection(
-                title = "悄悄关注的人",
-                feed = privateFollowing,
-                emptyText = "还没有悄悄关注",
-                onRefresh = { onRefresh(FollowUserFeed.Private) },
-                onLoadMore = { onLoadMore(FollowUserFeed.Private) },
+                title = selectedFeed.label,
+                feed = feed,
+                emptyText = if (selectedFeed == FollowUserFeed.Private) "还没有悄悄关注" else "还没有公开关注",
+                onRefresh = { onRefresh(selectedFeed) },
+                onLoadMore = { onLoadMore(selectedFeed) },
                 onOpenAuthor = onOpenAuthor,
             )
         }
@@ -2314,7 +2588,7 @@ private fun FollowingUserSection(
         SectionHeader(
             title = title,
             count = feed.items.size,
-            countLabel = "${feed.items.size} users",
+            countLabel = null,
             isLoading = feed.isLoading,
             onRefresh = onRefresh,
             showRefresh = true,
@@ -3634,6 +3908,7 @@ private fun SearchScreen(
     val searchGridState = rememberLazyStaggeredGridState()
     val decorativeFeedSemantics = rememberDecorativeFeedSemantics()
     val resultGridState = rememberLazyStaggeredGridState()
+    var selectedDiscoverFeed by remember { mutableStateOf(DiscoverFeed.Public) }
 
     LaunchedEffect(isSearchActive, nextUrl, isLoadingMore, isBusy, items.size) {
         if (!isSearchActive) return@LaunchedEffect
@@ -3661,7 +3936,7 @@ private fun SearchScreen(
                             text = if (isSearchActive) {
                                 "${items.size} 搜索结果"
                             } else {
-                                "${discover.publicWorks.items.size + discover.privateWorks.items.size} 关注作品"
+                                "关注作品"
                             },
                             style = MaterialTheme.typography.labelLarge,
                             color = MaterialTheme.colorScheme.secondary,
@@ -3706,6 +3981,13 @@ private fun SearchScreen(
                     }
                     discoverItems(
                         discover = discover,
+                        selectedFeed = selectedDiscoverFeed,
+                        onSelectFeed = { feed ->
+                            selectedDiscoverFeed = feed
+                            if (discover.feed(feed).items.isEmpty()) {
+                                onLoadMoreDiscover(feed, true)
+                            }
+                        },
                         onRefresh = onRefreshDiscover,
                         onLoadMore = onLoadMoreDiscover,
                         onOpenPreview = onOpenPreview,
@@ -3975,27 +4257,76 @@ private fun SearchResultHeader(
     }
 }
 
+@Composable
+private fun DiscoverFollowPanel(
+    discover: DiscoverState,
+    selectedFeed: DiscoverFeed,
+    onSelectFeed: (DiscoverFeed) -> Unit,
+    onRefresh: () -> Unit,
+) {
+    val feed = discover.feed(selectedFeed)
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            SectionHeader(
+                title = "关注作品",
+                count = feed.items.size,
+                countLabel = null,
+                isLoading = feed.isLoading,
+                onRefresh = onRefresh,
+                showRefresh = true,
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                DiscoverFeed.entries.forEach { tab ->
+                    FilterChip(
+                        selected = selectedFeed == tab,
+                        onClick = { onSelectFeed(tab) },
+                        label = { Text(tab.label) },
+                        leadingIcon = {
+                            Icon(tab.icon, contentDescription = null, modifier = Modifier.size(18.dp))
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
 private fun LazyStaggeredGridScope.discoverItems(
     discover: DiscoverState,
+    selectedFeed: DiscoverFeed,
+    onSelectFeed: (DiscoverFeed) -> Unit,
     onRefresh: () -> Unit,
     onLoadMore: (DiscoverFeed, Boolean) -> Unit,
     onOpenPreview: (Illust) -> Unit,
     clearSemantics: Boolean,
 ) {
+    val feed = discover.feed(selectedFeed)
     item(span = StaggeredGridItemSpan.FullLine) {
-        SectionHeader(
-            title = "关注作品",
-            count = discover.publicWorks.items.size,
-            isLoading = discover.publicWorks.isLoading,
+        DiscoverFollowPanel(
+            discover = discover,
+            selectedFeed = selectedFeed,
+            onSelectFeed = onSelectFeed,
             onRefresh = onRefresh,
-            actionLabel = "刷新",
-            showRefresh = true,
         )
     }
-    discoverFeedMessages(discover.publicWorks, "还没有加载到关注用户作品")
+    discoverFeedMessages(
+        feed = feed,
+        emptyText = if (selectedFeed == DiscoverFeed.Private) "还没有加载到悄悄关注作品" else "还没有加载到关注用户作品",
+    )
     items(
-        discover.publicWorks.items,
-        key = { "discover-public-${it.id}" },
+        feed.items,
+        key = { "discover-${selectedFeed.name}-${it.id}" },
         contentType = { "illust-card" },
     ) { illust ->
         IllustCard(
@@ -4006,47 +4337,9 @@ private fun LazyStaggeredGridScope.discoverItems(
     }
     item(span = StaggeredGridItemSpan.FullLine) {
         DiscoverPagingFooter(
-            feed = discover.publicWorks,
-            onLoadMore = { onLoadMore(DiscoverFeed.Public, false) },
+            feed = feed,
+            onLoadMore = { onLoadMore(selectedFeed, false) },
         )
-    }
-    item(span = StaggeredGridItemSpan.FullLine) {
-        SectionHeader(
-            title = "悄悄关注",
-            count = discover.privateWorks.items.size,
-            isLoading = discover.privateWorks.isLoading,
-            onRefresh = onRefresh,
-            actionLabel = "刷新",
-            showRefresh = true,
-        )
-    }
-    discoverFeedMessages(discover.privateWorks, "还没有加载到悄悄关注作品")
-    items(
-        discover.privateWorks.items,
-        key = { "discover-private-${it.id}" },
-        contentType = { "illust-card" },
-    ) { illust ->
-        IllustCard(
-            illust = illust,
-            clearSemantics = clearSemantics,
-            onClick = onOpenPreview,
-        )
-    }
-    item(span = StaggeredGridItemSpan.FullLine) {
-        DiscoverPagingFooter(
-            feed = discover.privateWorks,
-            onLoadMore = { onLoadMore(DiscoverFeed.Private, false) },
-        )
-    }
-    if (
-        discover.publicWorks.items.isEmpty() &&
-        discover.privateWorks.items.isEmpty() &&
-        !discover.publicWorks.isLoading &&
-        !discover.privateWorks.isLoading
-    ) {
-        item(span = StaggeredGridItemSpan.FullLine) {
-            EmptySearch(Modifier.fillMaxWidth())
-        }
     }
 }
 
@@ -4117,7 +4410,16 @@ private fun PreviewScreen(
     state: PuxivUiState,
     onBack: () -> Unit,
     onSelectImage: (Int) -> Unit,
-    onToggleBookmark: () -> Unit,
+    bookmarkTags: List<String>,
+    areBookmarkTagsLoaded: Boolean,
+    selectedBookmark: SelectedBookmarkState,
+    onBookmarkPublic: (List<String>) -> Unit,
+    onBookmarkPrivate: (List<String>) -> Unit,
+    onAddBookmarkTags: (List<String>) -> Unit,
+    onToggleBookmarkTag: (String) -> Unit,
+    onDeleteBookmark: () -> Unit,
+    onLoadBookmarkDetail: (Long, Boolean) -> Unit,
+    onLoadBookmarkTags: () -> Unit,
     onLoadRelated: () -> Unit,
     onOpenPreview: (Illust) -> Unit,
     onOpenFullScreen: (Int) -> Unit,
@@ -4129,6 +4431,17 @@ private fun PreviewScreen(
     onOpenAuthor: (Illust) -> Unit,
 ) {
     val illust = state.selectedIllust
+    LaunchedEffect(illust?.id, illust?.isBookmarked, selectedBookmark.isLoaded) {
+        val id = illust?.id ?: return@LaunchedEffect
+        if (illust.isBookmarked && !selectedBookmark.isLoaded) {
+            onLoadBookmarkDetail(id, false)
+        }
+    }
+    LaunchedEffect(areBookmarkTagsLoaded) {
+        if (!areBookmarkTagsLoaded) {
+            onLoadBookmarkTags()
+        }
+    }
     val previewStateHolder = rememberSaveableStateHolder()
     var measuredRatios by remember(illust?.id) { mutableStateOf<Map<Int, Float>>(emptyMap()) }
     fun updateMeasuredRatio(index: Int, width: Int, height: Int) {
@@ -4204,7 +4517,13 @@ private fun PreviewScreen(
                             IllustMeta(
                                 illust = illust,
                                 related = state.related,
-                                onToggleBookmark = onToggleBookmark,
+                                bookmarkTags = bookmarkTags,
+                                selectedBookmark = selectedBookmark,
+                                onBookmarkPublic = onBookmarkPublic,
+                                onBookmarkPrivate = onBookmarkPrivate,
+                                onAddBookmarkTags = onAddBookmarkTags,
+                                onToggleBookmarkTag = onToggleBookmarkTag,
+                                onDeleteBookmark = onDeleteBookmark,
                                 onDownload = onDownload,
                                 actionsEnabled = !state.isBusy,
                                 onLoadRelated = onLoadRelated,
@@ -4280,7 +4599,13 @@ private fun PreviewScreen(
                             IllustMeta(
                                 illust = illust,
                                 related = state.related,
-                                onToggleBookmark = onToggleBookmark,
+                                bookmarkTags = bookmarkTags,
+                                selectedBookmark = selectedBookmark,
+                                onBookmarkPublic = onBookmarkPublic,
+                                onBookmarkPrivate = onBookmarkPrivate,
+                                onAddBookmarkTags = onAddBookmarkTags,
+                                onToggleBookmarkTag = onToggleBookmarkTag,
+                                onDeleteBookmark = onDeleteBookmark,
                                 onDownload = onDownload,
                                 actionsEnabled = !state.isBusy,
                                 onLoadRelated = onLoadRelated,
@@ -4759,6 +5084,76 @@ private fun PagingFooter(
 }
 
 private fun Illust.previewUrls(): List<String> = imageUrls.ifEmpty { listOfNotNull(previewUrl) }
+
+private fun MyState.bookmarkFeed(feed: BookmarkFeed): FeedState {
+    return when (feed) {
+        BookmarkFeed.Public -> bookmarks
+        BookmarkFeed.Private -> privateBookmarks
+    }
+}
+
+private fun MyState.bookmarkTags(feed: BookmarkFeed): List<BookmarkTag> {
+    return when (feed) {
+        BookmarkFeed.Public -> publicBookmarkTags
+        BookmarkFeed.Private -> privateBookmarkTags
+    }
+}
+
+private fun MyState.followingFeed(feed: FollowUserFeed): UserPreviewFeedState {
+    return when (feed) {
+        FollowUserFeed.Public -> publicFollowing
+        FollowUserFeed.Private -> privateFollowing
+    }
+}
+
+private fun DiscoverState.feed(feed: DiscoverFeed): FeedState {
+    return when (feed) {
+        DiscoverFeed.Public -> publicWorks
+        DiscoverFeed.Private -> privateWorks
+    }
+}
+
+private val BookmarkFeed.label: String
+    get() = when (this) {
+        BookmarkFeed.Public -> "收藏作品"
+        BookmarkFeed.Private -> "私密收藏"
+    }
+
+private val BookmarkFeed.icon: ImageVector
+    get() = when (this) {
+        BookmarkFeed.Public -> Icons.Default.Favorite
+        BookmarkFeed.Private -> Icons.Default.Lock
+    }
+
+private val FollowUserFeed.label: String
+    get() = when (this) {
+        FollowUserFeed.Public -> "公开关注"
+        FollowUserFeed.Private -> "悄悄关注"
+    }
+
+private val FollowUserFeed.icon: ImageVector
+    get() = when (this) {
+        FollowUserFeed.Public -> Icons.Default.AccountCircle
+        FollowUserFeed.Private -> Icons.Default.Lock
+    }
+
+private val DiscoverFeed.label: String
+    get() = when (this) {
+        DiscoverFeed.Public -> "公开关注"
+        DiscoverFeed.Private -> "悄悄关注"
+    }
+
+private val DiscoverFeed.icon: ImageVector
+    get() = when (this) {
+        DiscoverFeed.Public -> Icons.Default.AccountCircle
+        DiscoverFeed.Private -> Icons.Default.Lock
+    }
+
+private fun MyState.bookmarkTags(): List<String> {
+    return (publicBookmarkTags.map { it.name } + privateBookmarkTags.map { it.name })
+        .distinctBy { it.lowercase() }
+        .take(10)
+}
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -5355,11 +5750,52 @@ private fun FullScreenZoomableImage(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun BookmarkActionButton(
+    isBookmarked: Boolean,
+    enabled: Boolean,
+    onPublicBookmark: () -> Unit,
+    onPrivateBookmark: () -> Unit,
+    onDeleteBookmark: () -> Unit,
+) {
+    val contentColor = MaterialTheme.colorScheme.onSurface
+    Box(
+        modifier = Modifier
+            .size(48.dp)
+            .combinedClickable(
+                enabled = enabled,
+                onClick = {
+                    if (isBookmarked) {
+                        onDeleteBookmark()
+                    } else {
+                        onPublicBookmark()
+                    }
+                },
+                onLongClick = if (isBookmarked) null else onPrivateBookmark,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = if (isBookmarked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+            contentDescription = if (isBookmarked) "取消收藏" else "收藏",
+            tint = if (enabled) contentColor else contentColor.copy(alpha = 0.45f),
+        )
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun IllustMeta(
     illust: Illust,
     related: FeedState,
-    onToggleBookmark: () -> Unit,
+    bookmarkTags: List<String>,
+    selectedBookmark: SelectedBookmarkState,
+    onBookmarkPublic: (List<String>) -> Unit,
+    onBookmarkPrivate: (List<String>) -> Unit,
+    onAddBookmarkTags: (List<String>) -> Unit,
+    onToggleBookmarkTag: (String) -> Unit,
+    onDeleteBookmark: () -> Unit,
     onDownload: () -> Unit,
     actionsEnabled: Boolean,
     onLoadRelated: () -> Unit,
@@ -5368,6 +5804,15 @@ private fun IllustMeta(
     onOpenAuthor: (Illust) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var bookmarkTagInput by remember(illust.id) { mutableStateOf("") }
+    var selectedBookmarkTags by remember(illust.id) {
+        mutableStateOf<Set<String>>(emptySet())
+    }
+    val inputTag = bookmarkTagInput.normalizedBookmarkTagOrNull()
+    val activeBookmarkTags = selectedBookmark.tags
+    val selectedTags = (selectedBookmarkTags + listOfNotNull(inputTag))
+        .mapNotNull { it.normalizedBookmarkTagOrNull() }
+        .distinctBy { it.lowercase() }
     Column(
         modifier = modifier
             .background(MaterialTheme.colorScheme.surface)
@@ -5423,16 +5868,13 @@ private fun IllustMeta(
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            IconButton(
-                onClick = onToggleBookmark,
+            BookmarkActionButton(
+                isBookmarked = illust.isBookmarked,
                 enabled = actionsEnabled,
-            ) {
-                Icon(
-                    imageVector = if (illust.isBookmarked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                    contentDescription = if (illust.isBookmarked) "取消收藏" else "收藏",
-                    tint = if (illust.isBookmarked) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+                onPublicBookmark = { onBookmarkPublic(selectedTags) },
+                onPrivateBookmark = { onBookmarkPrivate(selectedTags) },
+                onDeleteBookmark = onDeleteBookmark,
+            )
         }
         FlowRow(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -5454,6 +5896,37 @@ private fun IllustMeta(
                     AssistChip(onClick = { onTagClick(tag) }, label = { Text(tag) })
                 }
             }
+        }
+        if (actionsEnabled || bookmarkTags.isNotEmpty() || bookmarkTagInput.isNotBlank()) {
+            BookmarkTagSelector(
+                tags = bookmarkTags,
+                selectedTags = if (illust.isBookmarked) activeBookmarkTags.toSet() else selectedBookmarkTags,
+                input = bookmarkTagInput,
+                onInputChange = { bookmarkTagInput = it },
+                isBusy = selectedBookmark.isLoading,
+                onAddInputTag = {
+                    val tag = bookmarkTagInput.normalizedBookmarkTagOrNull() ?: return@BookmarkTagSelector
+                    if (illust.isBookmarked) {
+                        onAddBookmarkTags(listOf(tag))
+                        bookmarkTagInput = ""
+                    } else {
+                        selectedBookmarkTags = (selectedBookmarkTags + tag).toSet()
+                        bookmarkTagInput = ""
+                    }
+                },
+                onToggle = { tag ->
+                    if (illust.isBookmarked) {
+                        onToggleBookmarkTag(tag)
+                        return@BookmarkTagSelector
+                    }
+                    val selected = selectedBookmarkTags.any { it.equals(tag, ignoreCase = true) }
+                    selectedBookmarkTags = if (selected) {
+                        selectedBookmarkTags.filterNot { it.equals(tag, ignoreCase = true) }.toSet()
+                    } else {
+                        selectedBookmarkTags + tag
+                    }
+                },
+            )
         }
         illust.caption
             .plainCaption()
@@ -5491,6 +5964,148 @@ private fun IllustMeta(
             }
         }
     }
+}
+
+@Composable
+private fun BookmarkTagSelector(
+    tags: List<String>,
+    selectedTags: Set<String>,
+    input: String,
+    onInputChange: (String) -> Unit,
+    isBusy: Boolean,
+    onAddInputTag: () -> Unit,
+    onToggle: (String) -> Unit,
+) {
+    val visibleTags = remember(tags, selectedTags) {
+        (tags + selectedTags.filter { selected ->
+            tags.none { it.equals(selected, ignoreCase = true) }
+        }).distinctBy { it.lowercase() }
+    }
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Icon(
+                    Icons.Default.LocalOffer,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = "收藏标签",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (isBusy) {
+                    Spacer(Modifier.width(2.dp))
+                    CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
+                }
+            }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                OutlinedTextField(
+                    value = input,
+                    onValueChange = onInputChange,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(56.dp),
+                    label = { Text("新标签") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { onAddInputTag() }),
+                )
+                IconButton(
+                    onClick = onAddInputTag,
+                    enabled = input.normalizedBookmarkTagOrNull() != null && !isBusy,
+                    modifier = Modifier.size(56.dp),
+                ) {
+                    Icon(
+                        Icons.Default.Add,
+                        contentDescription = "添加收藏标签",
+                        tint = if (input.normalizedBookmarkTagOrNull() != null && !isBusy) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+                        },
+                    )
+                }
+            }
+            if (visibleTags.isNotEmpty()) {
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    contentPadding = PaddingValues(end = 2.dp),
+                    modifier = Modifier.height(34.dp),
+                ) {
+                    lazyRowItems(visibleTags, key = { it.lowercase() }) { tag ->
+                        val selected = selectedTags.any { it.equals(tag, ignoreCase = true) }
+                        BookmarkSelectionChip(
+                            tag = tag,
+                            selected = selected,
+                            enabled = !isBusy,
+                            onClick = { onToggle(tag) },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BookmarkSelectionChip(
+    tag: String,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.height(32.dp),
+        onClick = onClick,
+        enabled = enabled,
+        shape = RoundedCornerShape(8.dp),
+        color = if (selected) {
+            MaterialTheme.colorScheme.primaryContainer
+        } else {
+            MaterialTheme.colorScheme.surface
+        },
+        contentColor = if (selected) {
+            MaterialTheme.colorScheme.onPrimaryContainer
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        },
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            Text(
+                text = "#$tag",
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+private fun String.normalizedBookmarkTagOrNull(): String? {
+    return trim()
+        .trimStart('#')
+        .replace(Regex("""\s+"""), " ")
+        .take(40)
+        .takeIf { it.isNotBlank() }
 }
 
 @Composable

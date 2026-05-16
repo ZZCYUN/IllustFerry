@@ -1,8 +1,10 @@
 package JunZi.Pixiv.data.network
 
 import JunZi.Pixiv.data.model.IllustDetailResponse
+import JunZi.Pixiv.data.model.IllustBookmarkDetailResponse
 import JunZi.Pixiv.data.model.IllustCommentsResponse
 import JunZi.Pixiv.data.model.IllustsResponse
+import JunZi.Pixiv.data.model.BookmarkTagsResponse
 import JunZi.Pixiv.data.model.OAuthTokenResponse
 import JunZi.Pixiv.data.model.PixivErrorResponse
 import JunZi.Pixiv.data.model.TrendingTagsResponse
@@ -23,6 +25,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import java.io.IOException
+import java.util.Locale
 
 class PixivApiClient(
     private val gson: Gson = Gson(),
@@ -192,14 +195,33 @@ class PixivApiClient(
         userId: Long,
         accessToken: String,
         restrict: String = "public",
+        tag: String? = null,
     ): IllustsResponse = withContext(Dispatchers.IO) {
-        val url = "$API_BASE/v1/user/bookmarks/illust".toHttpUrl().newBuilder()
+        val builder = "$API_BASE/v1/user/bookmarks/illust".toHttpUrl().newBuilder()
             .addQueryParameter("filter", FILTER_FOR_IOS)
             .addQueryParameter("user_id", userId.toString())
             .addQueryParameter("restrict", restrict)
-            .build()
+        tag?.trim()?.trimStart('#')?.takeIf { it.isNotBlank() }?.let {
+            builder.addQueryParameter("tag", it)
+        }
+        val url = builder.build()
 
         execute(authorizedGet(url.toString(), accessToken), IllustsResponse::class.java)
+    }
+
+    suspend fun bookmarkTagsIllust(
+        userId: Long,
+        accessToken: String,
+        restrict: String = "public",
+        offset: Int? = null,
+    ): BookmarkTagsResponse = withContext(Dispatchers.IO) {
+        val builder = "$API_BASE/v1/user/bookmark-tags/illust".toHttpUrl().newBuilder()
+            .addQueryParameter("user_id", userId.toString())
+            .addQueryParameter("restrict", restrict)
+        offset?.takeIf { it > 0 }?.let { builder.addQueryParameter("offset", it.toString()) }
+        val url = builder.build()
+
+        execute(authorizedGet(url.toString(), accessToken), BookmarkTagsResponse::class.java)
     }
 
     suspend fun nextPage(nextUrl: String, accessToken: String): IllustsResponse = withContext(Dispatchers.IO) {
@@ -213,6 +235,17 @@ class PixivApiClient(
             .build()
 
         execute(authorizedGet(url.toString(), accessToken), IllustDetailResponse::class.java)
+    }
+
+    suspend fun illustBookmarkDetail(
+        illustId: Long,
+        accessToken: String,
+    ): IllustBookmarkDetailResponse = withContext(Dispatchers.IO) {
+        val url = "$API_BASE/v2/illust/bookmark/detail".toHttpUrl().newBuilder()
+            .addQueryParameter("illust_id", illustId.toString())
+            .build()
+
+        execute(authorizedGet(url.toString(), accessToken), IllustBookmarkDetailResponse::class.java)
     }
 
     suspend fun userDetail(userId: Long, accessToken: String): UserDetailResponse = withContext(Dispatchers.IO) {
@@ -294,11 +327,19 @@ class PixivApiClient(
         illustId: Long,
         accessToken: String,
         restrict: String = "public",
+        tags: List<String> = emptyList(),
     ): Unit = withContext(Dispatchers.IO) {
-        val body = FormBody.Builder()
+        val bodyBuilder = FormBody.Builder()
             .add("illust_id", illustId.toString())
             .add("restrict", restrict)
-            .build()
+        tags.asSequence()
+            .map { it.trim().trimStart('#') }
+            .filter { it.isNotBlank() }
+            .distinctBy { it.lowercase(Locale.ROOT) }
+            .take(10)
+            .joinToString(" ")
+            .let { bodyBuilder.add("tags[]", it) }
+        val body = bodyBuilder.build()
 
         val request = authorizedPost("$API_BASE/v2/illust/bookmark/add", accessToken, body)
         executeEmpty(request)
