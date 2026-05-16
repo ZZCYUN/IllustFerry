@@ -39,13 +39,13 @@ import JunZi.Pixiv.data.model.SearchTarget
 import JunZi.Pixiv.data.model.TrendingTag
 import JunZi.Pixiv.data.model.UgoiraFrameImage
 import JunZi.Pixiv.data.network.LocalPixivProxy
+import JunZi.Pixiv.data.network.PixivNetworkConfig
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.drawable.Drawable
 import android.net.Uri
-import android.net.http.SslCertificate
 import android.net.http.SslError
 import android.os.Build
 import android.os.Handler
@@ -117,6 +117,7 @@ import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
 import androidx.compose.foundation.lazy.staggeredgrid.items
 import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -135,6 +136,8 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.CollectionsBookmark
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.GridView
@@ -144,6 +147,7 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.LocalOffer
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
@@ -192,6 +196,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
@@ -235,9 +240,6 @@ import com.bumptech.glide.request.transition.Transition
 import androidx.webkit.ProxyConfig
 import androidx.webkit.ProxyController
 import androidx.webkit.WebViewFeature
-import java.io.ByteArrayInputStream
-import java.security.cert.CertificateFactory
-import java.security.cert.X509Certificate
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -261,6 +263,7 @@ private const val PuxivFullScreenMaxScale = 5f
 private const val PuxivZoomReleaseEpsilon = 0.01f
 private const val PuxivZoomedPageTurnThresholdDp = 72f
 private val PuxivFullScreenTopBarHeight = 64.dp
+private const val PixivOfficialWebUrl = "https://www.pixiv.net/"
 
 private enum class MyTab(val label: String) {
     Works("作品"),
@@ -278,7 +281,13 @@ fun PuxivApp(viewModel: PixivViewModel) {
     val transientStateHolder = rememberSaveableStateHolder()
     val mainShellScreen = if (state.screen == AppScreen.Preview) state.previewReturnScreen else state.screen
     val showMainShell = mainShellScreen in setOf(AppScreen.Home, AppScreen.Search, AppScreen.Me, AppScreen.Settings)
-    val showTransientScreen = state.screen in setOf(AppScreen.Login, AppScreen.WebLogin, AppScreen.Preview, AppScreen.Author)
+    val showTransientScreen = state.screen in setOf(
+        AppScreen.Login,
+        AppScreen.WebLogin,
+        AppScreen.WebPixiv,
+        AppScreen.Preview,
+        AppScreen.Author,
+    )
 
     PuxivTheme(
         themeMode = state.themeMode,
@@ -362,6 +371,10 @@ fun PuxivApp(viewModel: PixivViewModel) {
                                 loginUrl = state.loginUrl,
                                 onBack = viewModel::goBack,
                                 onCode = { code, useNetworkProxy -> viewModel.exchangeAuthCode(code, useNetworkProxy) },
+                            )
+
+                            AppScreen.WebPixiv -> WebPixivScreen(
+                                onBack = viewModel::goBack,
                             )
 
                             AppScreen.Preview -> PreviewScreen(
@@ -651,6 +664,7 @@ private fun MainShell(
                     onFilteredTagsInputChange = viewModel::updateFilteredTagsInput,
                     onSaveFilteredTags = viewModel::saveFilteredTags,
                     onUgoiraSaveFormatChange = viewModel::updateUgoiraSaveFormat,
+                    onOpenWebPixiv = viewModel::openWebPixiv,
                 )
             }
         }
@@ -3020,6 +3034,7 @@ private fun SettingsScreen(
     onFilteredTagsInputChange: (String) -> Unit,
     onSaveFilteredTags: () -> Unit,
     onUgoiraSaveFormatChange: (UgoiraSaveFormat) -> Unit,
+    onOpenWebPixiv: () -> Unit,
 ) {
     Scaffold(
         modifier = Modifier.padding(contentPadding),
@@ -3334,6 +3349,7 @@ private fun SettingsScreen(
                     }
                 }
             }
+            ExperimentalFeaturesSection(onOpenWebPixiv = onOpenWebPixiv)
             OpenSourceLicenseSection()
         }
     }
@@ -3729,6 +3745,58 @@ private fun String.toColorOrNull(): Color? {
 }
 
 private val UI_HEX_COLOR_PATTERN = Regex("""#[0-9A-Fa-f]{6}""")
+
+@Composable
+private fun ExperimentalFeaturesSection(
+    onOpenWebPixiv: () -> Unit,
+) {
+    Text(
+        text = "实验功能",
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.Bold,
+    )
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onOpenWebPixiv),
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Default.Public,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+            )
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    text = "Web Pixiv",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = "使用登录页的内置代理 WebView 模式访问 Pixiv 官网",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Icon(
+                Icons.AutoMirrored.Filled.NavigateNext,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
 
 @Composable
 private fun OpenSourceLicenseSection() {
@@ -5805,12 +5873,9 @@ private fun IllustMeta(
     modifier: Modifier = Modifier,
 ) {
     var bookmarkTagInput by remember(illust.id) { mutableStateOf("") }
-    var selectedBookmarkTags by remember(illust.id) {
-        mutableStateOf<Set<String>>(emptySet())
-    }
     val inputTag = bookmarkTagInput.normalizedBookmarkTagOrNull()
     val activeBookmarkTags = selectedBookmark.tags
-    val selectedTags = (selectedBookmarkTags + listOfNotNull(inputTag))
+    val selectedTags = listOfNotNull(inputTag)
         .mapNotNull { it.normalizedBookmarkTagOrNull() }
         .distinctBy { it.lowercase() }
     Column(
@@ -5897,34 +5962,20 @@ private fun IllustMeta(
                 }
             }
         }
-        if (actionsEnabled || bookmarkTags.isNotEmpty() || bookmarkTagInput.isNotBlank()) {
+        if (illust.isBookmarked && (actionsEnabled || bookmarkTags.isNotEmpty() || bookmarkTagInput.isNotBlank())) {
             BookmarkTagSelector(
                 tags = bookmarkTags,
-                selectedTags = if (illust.isBookmarked) activeBookmarkTags.toSet() else selectedBookmarkTags,
+                selectedTags = activeBookmarkTags.toSet(),
                 input = bookmarkTagInput,
                 onInputChange = { bookmarkTagInput = it },
                 isBusy = selectedBookmark.isLoading,
                 onAddInputTag = {
                     val tag = bookmarkTagInput.normalizedBookmarkTagOrNull() ?: return@BookmarkTagSelector
-                    if (illust.isBookmarked) {
-                        onAddBookmarkTags(listOf(tag))
-                        bookmarkTagInput = ""
-                    } else {
-                        selectedBookmarkTags = (selectedBookmarkTags + tag).toSet()
-                        bookmarkTagInput = ""
-                    }
+                    onAddBookmarkTags(listOf(tag))
+                    bookmarkTagInput = ""
                 },
                 onToggle = { tag ->
-                    if (illust.isBookmarked) {
-                        onToggleBookmarkTag(tag)
-                        return@BookmarkTagSelector
-                    }
-                    val selected = selectedBookmarkTags.any { it.equals(tag, ignoreCase = true) }
-                    selectedBookmarkTags = if (selected) {
-                        selectedBookmarkTags.filterNot { it.equals(tag, ignoreCase = true) }.toSet()
-                    } else {
-                        selectedBookmarkTags + tag
-                    }
+                    onToggleBookmarkTag(tag)
                 },
             )
         }
@@ -6534,6 +6585,39 @@ private fun WebLoginScreen(
     onBack: () -> Unit,
     onCode: (String, Boolean) -> Unit,
 ) {
+    ProxiedPixivWebViewScreen(
+        title = "网页登录",
+        initialUrl = loginUrl,
+        onBack = onBack,
+        onInterceptUrl = { uri, useAppProxy ->
+            uri.extractPixivCode()?.let {
+                onCode(it, useAppProxy)
+                true
+            } ?: false
+        },
+    )
+}
+
+@Composable
+private fun WebPixivScreen(
+    onBack: () -> Unit,
+) {
+    ProxiedPixivWebViewScreen(
+        title = "Web Pixiv",
+        initialUrl = PixivOfficialWebUrl,
+        onBack = onBack,
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@SuppressLint("SetJavaScriptEnabled", "WebViewClientOnReceivedSslError")
+@Composable
+private fun ProxiedPixivWebViewScreen(
+    title: String,
+    initialUrl: String,
+    onBack: () -> Unit,
+    onInterceptUrl: (Uri, Boolean) -> Boolean = { _, _ -> false },
+) {
     val context = LocalContext.current
     val fallbackProxy = remember { LocalPixivProxy() }
     val mainExecutor = remember { Executor { command -> Handler(Looper.getMainLooper()).post(command) } }
@@ -6542,6 +6626,7 @@ private fun WebLoginScreen(
     var proxyStatus by remember { mutableStateOf("内置代理准备中") }
     var proxyDiagnostics by remember { mutableStateOf("等待代理事件") }
     var activeProxyPort by remember { mutableIntStateOf(0) }
+    var debugBarExpanded by rememberSaveable { mutableStateOf(true) }
 
     LaunchedEffect(useAppProxy, activeProxyPort, proxyReady) {
         while (isActive) {
@@ -6562,11 +6647,24 @@ private fun WebLoginScreen(
         }
     }
 
-    DisposableEffect(loginUrl, useAppProxy) {
+    DisposableEffect(initialUrl, useAppProxy) {
         proxyReady = false
         activeProxyPort = 0
-        proxyStatus = if (useAppProxy) "内置代理准备中" else "直连准备中"
         if (useAppProxy) {
+            // 不在这里单独拉一次 DoH——DNS 由 PixivViewModel 在 init 时统一刷新写进
+            // PixivNetworkConfig.hostToIps，WebView 只是消费方。这里读 snapshot 只为给
+            // 用户一个"现在 hosts 表是不是空的"的视觉反馈，不触发任何网络。
+            val snapshot = PixivNetworkConfig.snapshot()
+            proxyStatus = when {
+                PixivNetworkConfig.isVpnActive ->
+                    "VPN 已生效，代理候选将走系统 DNS"
+                !PixivNetworkConfig.useHostIpRouting ->
+                    "host/IP 路由已关闭，代理仅能依赖系统 DNS"
+                snapshot.isEmpty() ->
+                    "动态 hosts 未就绪，等待 ViewModel 首次刷新"
+                else ->
+                    "动态 hosts 已就绪（${snapshot.size} 项），内置代理准备中"
+            }
             fallbackProxy.stop()
             fallbackProxy.start()
             val proxyPort = fallbackProxy.port
@@ -6585,6 +6683,7 @@ private fun WebLoginScreen(
                 proxyStatus = "当前 WebView 不支持应用代理，尝试直连"
             }
         } else {
+            proxyStatus = "直连准备中"
             fallbackProxy.stop()
             if (WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) {
                 ProxyController.getInstance().clearProxyOverride(mainExecutor) {
@@ -6608,7 +6707,7 @@ private fun WebLoginScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("网页登录") },
+                title = { Text(title) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
@@ -6635,22 +6734,17 @@ private fun WebLoginScreen(
                                 handler: SslErrorHandler?,
                                 error: SslError?,
                             ) {
-                                if (
-                                    useAppProxy &&
-                                    fallbackProxy.isProxyCertificate(
-                                        error?.url?.toUri()?.host,
-                                        error?.certificate?.toX509Certificate(),
-                                    )
-                                ) {
-                                    handler?.proceed()
-                                } else {
-                                    handler?.cancel()
-                                }
+                                // 放弃校验：本地代理用的是进程内一次性 CA，反正 WebView 也不会主动信任。
+                                // 与其纠结签发链，不如全放过；想抓包就抓，不在威胁模型里。
+                                fallbackProxy.noteWebViewEvent(
+                                    "ssl proceed host=${error?.url?.toUri()?.host} " +
+                                        "primary=${error?.primaryError} trust-all",
+                                )
+                                handler?.proceed()
                             }
 
                             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
-                                url?.toUri()?.extractPixivCode()?.let {
-                                    onCode(it, useAppProxy)
+                                if (url?.toUri()?.let { onInterceptUrl(it, useAppProxy) } == true) {
                                     return
                                 }
                                 proxyStatus = "加载中"
@@ -6672,69 +6766,88 @@ private fun WebLoginScreen(
                             }
 
                             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                                val code = request.url.extractPixivCode()
-                                if (code != null) {
-                                    onCode(code, useAppProxy)
-                                    return true
-                                }
-                                return false
+                                return onInterceptUrl(request.url, useAppProxy)
                             }
                         }
                     }
                 },
                 update = { webView ->
-                    val loadKey = "${loginUrl.hashCode()}:$useAppProxy"
-                    if (proxyReady && loginUrl.isNotBlank() && webView.tag != loadKey) {
+                    val loadKey = "${initialUrl.hashCode()}:$useAppProxy"
+                    if (proxyReady && initialUrl.isNotBlank() && webView.tag != loadKey) {
                         webView.tag = loadKey
-                        webView.loadUrl(loginUrl)
+                        webView.loadUrl(initialUrl)
                     }
                 },
             )
-            Surface(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .fillMaxWidth(),
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+            if (debugBarExpanded) {
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
                 ) {
-                    Column(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    Row(
+                        modifier = Modifier.padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text(
-                            text = proxyStatus,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (proxyReady) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.error,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            Text(
+                                text = proxyStatus,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (proxyReady) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.error,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                text = proxyDiagnostics,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 3,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        AssistChip(
+                            onClick = { useAppProxy = !useAppProxy },
+                            label = { Text(if (useAppProxy) "内置代理" else "直连") },
                         )
-                        Text(
-                            text = proxyDiagnostics,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 3,
-                            overflow = TextOverflow.Ellipsis,
+                        AssistChip(
+                            onClick = {
+                                runCatching {
+                                    context.startActivity(Intent(Intent.ACTION_VIEW, initialUrl.toUri()))
+                                }.onFailure {
+                                    proxyStatus = "无法打开外部浏览器"
+                                }
+                            },
+                            enabled = initialUrl.isNotBlank(),
+                            label = { Text("浏览器") },
+                        )
+                        IconButton(onClick = { debugBarExpanded = false }) {
+                            Icon(
+                                imageVector = Icons.Filled.ExpandLess,
+                                contentDescription = "收起调试栏",
+                            )
+                        }
+                    }
+                }
+            } else {
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(8.dp),
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+                    shadowElevation = 2.dp,
+                ) {
+                    IconButton(onClick = { debugBarExpanded = true }) {
+                        Icon(
+                            imageVector = Icons.Filled.ExpandMore,
+                            contentDescription = "展开调试栏",
                         )
                     }
-                    AssistChip(
-                        onClick = { useAppProxy = !useAppProxy },
-                        label = { Text(if (useAppProxy) "内置代理" else "直连") },
-                    )
-                    AssistChip(
-                        onClick = {
-                            runCatching {
-                                context.startActivity(Intent(Intent.ACTION_VIEW, loginUrl.toUri()))
-                            }.onFailure {
-                                proxyStatus = "无法打开外部浏览器"
-                            }
-                        },
-                        enabled = loginUrl.isNotBlank(),
-                        label = { Text("浏览器") },
-                    )
                 }
             }
         }
@@ -6978,17 +7091,3 @@ private fun Uri.extractPixivCode(): String? {
         "https://puxiv.local?$fragmentValue".toUri().getQueryParameter("code")
     }.getOrNull()
 }
-
-private fun SslCertificate.toX509Certificate(): X509Certificate? {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        x509Certificate?.let { return it }
-    }
-    return runCatching {
-        val bundle = SslCertificate.saveState(this) ?: return null
-        val bytes = bundle.getByteArray(SSL_CERTIFICATE_KEY) ?: return null
-        CertificateFactory.getInstance("X.509")
-            .generateCertificate(ByteArrayInputStream(bytes)) as? X509Certificate
-    }.getOrNull()
-}
-
-private const val SSL_CERTIFICATE_KEY = "x509-certificate"

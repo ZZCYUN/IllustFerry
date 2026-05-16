@@ -50,15 +50,8 @@ class PixivDnsUpdater(
         val answers = request(host)
             .filter { it.isIpAddress() }
             .distinct()
-            .let { normalizeAnswers(host, it) }
         if (answers.isNotEmpty()) return answers
         throw IOException("No DNS answer")
-    }
-
-    private fun normalizeAnswers(host: String, answers: List<String>): List<String> {
-        if (host != PixivHost.Web.rawHost) return answers
-        if (answers.none { it.startsWith("104.") }) return answers
-        return listOf(PixivHost.Web.defaultIp) + answers.filterNot { it.startsWith("104.") }
     }
 
     private fun request(host: String): List<String> {
@@ -103,11 +96,15 @@ class PixivDnsUpdater(
                     PixivHost.OAuth,
                     PixivHost.Accounts,
                     PixivHost.Source,
+                    // www.pixiv.net 复用 public-api 的 Pixiv Tokyo 段 IP——单独查
+                    // www.pixiv.net 会拿到 CloudFlare anycast，而 CF 节点必须靠 SNI
+                    // 路由；LocalPixivProxy 的上游握手是故意不带 SNI 的（避开 GFW DPI），
+                    // 所以这条链路只能走能在 default vhost 服 pixiv 的 Tokyo 源站。
+                    PixivHost.Web,
                 ),
             ),
             DnsTarget("i.pximg.net", listOf(PixivHost.Image)),
             DnsTarget("s.pximg.net", listOf(PixivHost.StaticImage)),
-            DnsTarget("www.pixiv.net", listOf(PixivHost.Web)),
             DnsTarget("www.pixivision.net", listOf(PixivHost.Pixivision)),
         )
     }

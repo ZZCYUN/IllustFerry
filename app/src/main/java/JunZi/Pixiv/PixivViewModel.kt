@@ -56,6 +56,7 @@ private fun nonBlankStringOrNull(value: String?): String? {
 enum class AppScreen {
     Login,
     WebLogin,
+    WebPixiv,
     Home,
     Search,
     Me,
@@ -68,6 +69,7 @@ private fun AppScreen.defaultBackTarget(): AppScreen {
     return when (this) {
         AppScreen.Login -> AppScreen.Login
         AppScreen.WebLogin -> AppScreen.Login
+        AppScreen.WebPixiv -> AppScreen.Settings
         AppScreen.Home -> AppScreen.Home
         AppScreen.Search -> AppScreen.Home
         AppScreen.Me -> AppScreen.Home
@@ -527,6 +529,10 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
 
     fun openSettings() {
         navigateTo(AppScreen.Settings)
+    }
+
+    fun openWebPixiv() {
+        navigateTo(AppScreen.WebPixiv)
     }
 
     fun openLoginScreen() {

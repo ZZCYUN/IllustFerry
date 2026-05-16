@@ -11,11 +11,11 @@ import java.net.Socket
 import java.net.URI
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedDeque
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.net.ssl.KeyManagerFactory
-import javax.net.ssl.SNIHostName
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.TrustManager
@@ -88,17 +88,6 @@ class LocalPixivProxy(
         executor = null
     }
 
-    fun isProxyCertificate(host: String?, certificate: X509Certificate?): Boolean {
-        val normalized = normalizeHost(host) ?: return false
-        if (!isMitmHost(normalized) || certificate == null) return false
-        return runCatching {
-            val ca = certificateAuthority
-            certificate.verify(ca.certificate.publicKey)
-            certificate.issuerX500Principal == ca.certificate.subjectX500Principal &&
-                certificate.matchesHost(normalized)
-        }.getOrDefault(false)
-    }
-
     private fun bindServerSocket(preferredPort: Int): ServerSocket {
         return runCatching {
             ServerSocket(preferredPort, 64, InetAddress.getByName("127.0.0.1"))
@@ -155,13 +144,23 @@ class LocalPixivProxy(
         requestLine: RequestLine,
         executor: ExecutorService,
     ) {
-        val target = parseAuthority(requestLine.target, defaultPort = 443)
-        if (target == null) {
+        val rawTarget = parseAuthority(requestLine.target, defaultPort = 443)
+        if (rawTarget == null) {
             drainHeaders(clientInput)
             sendSimpleResponse(client, 400, "Bad Request")
             return
         }
         drainHeaders(clientInput)
+
+        if (isBlockedHost(rawTarget.host)) {
+            reportState("blocked ${rawTarget.host}:${rawTarget.port}")
+            sendSimpleResponse(client, 502, "Bad Gateway")
+            return
+        }
+        val target = rewriteHost(rawTarget.host)?.let { rewritten ->
+            reportState("rewrite ${rawTarget.host} -> $rewritten")
+            rawTarget.copy(host = rewritten)
+        } ?: rawTarget
 
         var tunnelEstablished = false
         try {
@@ -191,7 +190,9 @@ class LocalPixivProxy(
         target: Authority,
         executor: ExecutorService,
     ) {
-        val upstream = connectUpstream(target.host, target.port, 20_000)
+        // 透明隧道用 5 秒拨号截止——pixiv 自家拨不通的子域 / 没在 block 表里的第三方
+        // 走到这里就别再陪它磨 20 秒，省得 WebView 等所有子资源齐了才放 onPageFinished。
+        val upstream = connectUpstream(target.host, target.port, 5_000)
         upstream.soTimeout = 0
         client.soTimeout = 0
         try {
@@ -214,24 +215,16 @@ class LocalPixivProxy(
         target: Authority,
         executor: ExecutorService,
     ) {
-        val upstream = connectUpstream(target.host, target.port, 20_000)
+        val (upstream, upstreamTls) = openMitmUpstream(target.host, target.port, 20_000)
         upstream.soTimeout = 0
         client.soTimeout = 0
         reportState("client tls handshake ${target.host}:${target.port}")
         val clientTls = createClientFacingTlsSocket(client, target.host)
-        reportState(
-            "upstream tls handshake ${target.host}:${target.port} via " +
-                "${upstream.inetAddress.hostAddress}:${upstream.port}",
-        )
-        val upstreamTls = createUpstreamTlsSocket(upstream, target.host, target.port)
         try {
-            proxySockets(
-                clientInput = clientTls.getInputStream(),
-                clientOutput = clientTls.getOutputStream(),
-                clientSocket = clientTls,
-                upstreamInput = upstreamTls.getInputStream(),
-                upstreamOutput = upstreamTls.getOutputStream(),
-                upstreamSocket = upstreamTls,
+            proxyMitmHttp(
+                clientTls = clientTls,
+                upstreamTls = upstreamTls,
+                host = target.host,
                 executor = executor,
             )
         } finally {
@@ -241,15 +234,65 @@ class LocalPixivProxy(
         }
     }
 
+    /**
+     * 给 MITM 链路用：把 TCP 和 TLS 握手当成一对原子操作做候选回退。
+     * 之前的 connectUpstream 只在 TCP 层 break，一旦 172.64.x 这种 IP TCP 通了但
+     * TLS 被对端（或 GFW）RST，整条 MITM 就死了。OkHttp 默认就是 TCP+TLS 一起重试，
+     * 这里复现同样语义，并把内置 PixivHost 的 fallback IP 也拼进候选，
+     * 即便运行时 DNS 把列表收窄成单点，也还有兜底可试。
+     */
+    private fun openMitmUpstream(host: String, port: Int, timeoutMillis: Int): Pair<Socket, SSLSocket> {
+        val candidates = mitmUpstreamCandidates(host)
+        var lastFailure: Throwable? = null
+        candidates.forEach { candidate ->
+            val tcp = trackSocket(Socket())
+            try {
+                reportState("dial $host:$port via $candidate")
+                tcp.connect(InetSocketAddress(candidate, port), timeoutMillis)
+                reportState("dial success $host:$port via $candidate")
+                tcp.soTimeout = timeoutMillis
+                reportState("upstream tls handshake $host:$port via $candidate")
+                val tls = createUpstreamTlsSocket(tcp, host, port)
+                tcp.soTimeout = 0
+                return tcp to tls
+            } catch (error: Throwable) {
+                lastFailure = error
+                reportError("upstream $host:$port via $candidate", error)
+                closeAndForget(tcp)
+            }
+        }
+        throw IOException(
+            "All upstream candidates failed for $host (${candidates.joinToString()})",
+            lastFailure,
+        )
+    }
+
+    private fun mitmUpstreamCandidates(host: String): List<String> {
+        // 候选只来自 PixivNetworkConfig（即 PixivDnsUpdater 实时拉回来的运行时 host 表）。
+        // 拿不到值时退化到字面 host，让底层 Socket 走系统 DNS——而不是再回退到任何
+        // 出厂硬编码 IP。这样做是为了避免 dead IP（如 210.140.131.199）长期占据首位、
+        // 每条连接都先空转 20 秒。
+        return (PixivNetworkConfig.addressesFor(host) + host).distinct()
+    }
+
     private fun handleHttp(client: Socket, clientInput: InputStream, requestLine: RequestLine) {
         val headers = readHeaders(clientInput) ?: run {
             sendSimpleResponse(client, 400, "Bad Request")
             return
         }
-        val target = parseHttpTarget(requestLine.target, headers) ?: run {
+        val rawTarget = parseHttpTarget(requestLine.target, headers) ?: run {
             sendSimpleResponse(client, 400, "Bad Request")
             return
         }
+        if (isBlockedHost(rawTarget.host)) {
+            reportState("blocked ${rawTarget.host}:${rawTarget.port}")
+            sendSimpleResponse(client, 502, "Bad Gateway")
+            return
+        }
+        val target = rewriteHost(rawTarget.host)?.let { rewritten ->
+            reportState("rewrite ${rawTarget.host} -> $rewritten")
+            rawTarget.copy(host = rewritten)
+        } ?: rawTarget
         val contentLength = headers.contentLength()
         val chunked = headers.isChunked()
         val expectsContinue = headers.expectsContinue()
@@ -331,6 +374,182 @@ class LocalPixivProxy(
         runCatching { serverToClient.get() }
     }
 
+    /**
+     * MITM 隧道里走 HTTP 明文层的诊断管道：在 ALPN 强制为 http/1.1 的前提下，按行解析
+     * 请求 / 响应，把 host + method + path + 状态码 + 端到端耗时打到 [reportState]。
+     * 这条路径取代 [proxySockets]：仍然是双向流，但中间是结构化转发，不是 raw byte pump。
+     *
+     * 设计要点：
+     *  - 收到 101 Switching Protocols 时切换到原始字节透传（WebSocket / H2C upgrade），
+     *    [upgraded] 同步给请求方向，避免它继续按 HTTP 行解析 WS 二进制帧。
+     *  - body 路径完全复用 [copyFixedLength] / [copyChunkedBody]，保证大文件不被 16KB
+     *    buffer 拖慢；不引入额外的解码层（不解 HPACK、不解 gzip）。
+     *  - [pending] 是 FIFO 队列，自然支持 HTTP/1.1 pipelining；100-continue 用 peek，
+     *    真正的最终响应才 poll。
+     */
+    private fun proxyMitmHttp(
+        clientTls: SSLSocket,
+        upstreamTls: SSLSocket,
+        host: String,
+        executor: ExecutorService,
+    ) {
+        val pending = ConcurrentLinkedDeque<MitmRequest>()
+        val upgraded = AtomicBoolean(false)
+        val reqJob = executor.submit {
+            try {
+                relayClientToUpstream(
+                    input = clientTls.getInputStream(),
+                    output = upstreamTls.getOutputStream(),
+                    host = host,
+                    pending = pending,
+                    upgraded = upgraded,
+                )
+            } catch (_: Throwable) {
+                // 端到端断开（client 关闭 / 上游 RST / TLS close_notify）在 read/write 上抛
+                // 都是常规收尾，不写 error 流，免得淹没真正的故障。
+            } finally {
+                runCatching { upstreamTls.close() }
+                runCatching { clientTls.close() }
+            }
+        }
+        val respJob = executor.submit {
+            try {
+                relayUpstreamToClient(
+                    input = upstreamTls.getInputStream(),
+                    output = clientTls.getOutputStream(),
+                    host = host,
+                    pending = pending,
+                    upgraded = upgraded,
+                )
+            } catch (_: Throwable) {
+            } finally {
+                runCatching { upstreamTls.close() }
+                runCatching { clientTls.close() }
+            }
+        }
+        runCatching { reqJob.get() }
+        runCatching { respJob.get() }
+    }
+
+    private fun relayClientToUpstream(
+        input: InputStream,
+        output: OutputStream,
+        host: String,
+        pending: ConcurrentLinkedDeque<MitmRequest>,
+        upgraded: AtomicBoolean,
+    ) {
+        while (!upgraded.get()) {
+            val requestLineText = input.readAsciiLine() ?: return
+            if (requestLineText.isEmpty()) continue
+            val headers = readHeaders(input)
+                ?: throw IOException("mitm req malformed headers $host")
+            val requestLine = parseRequestLine(requestLineText)
+            val method = requestLine?.method ?: "?"
+            val path = requestLine?.target ?: requestLineText.take(120)
+            reportState("mitm req $host $method $path")
+            pending.addLast(
+                MitmRequest(
+                    method = method,
+                    path = path,
+                    startedAt = System.currentTimeMillis(),
+                ),
+            )
+
+            writeAsciiLine(output, requestLineText)
+            headers.forEach { writeAsciiLine(output, "${it.name}: ${it.value}") }
+            writeAsciiLine(output, "")
+
+            val contentLength = headers.contentLength()
+            val chunked = headers.isChunked()
+            if (chunked) {
+                copyChunkedBody(input, output)
+            } else if (contentLength != null && contentLength > 0) {
+                copyFixedLength(input, output, contentLength)
+            }
+            output.flush()
+        }
+        pumpRawBytes(input, output)
+    }
+
+    private fun relayUpstreamToClient(
+        input: InputStream,
+        output: OutputStream,
+        host: String,
+        pending: ConcurrentLinkedDeque<MitmRequest>,
+        upgraded: AtomicBoolean,
+    ) {
+        while (!upgraded.get()) {
+            val statusLineText = input.readAsciiLine() ?: return
+            if (statusLineText.isEmpty()) continue
+            val statusCode = parseStatusCode(statusLineText)
+            val headers = readHeaders(input)
+                ?: throw IOException("mitm resp malformed headers $host")
+            val informational = statusCode in 100..199 && statusCode != 101
+            val request = if (informational) pending.peekFirst() else pending.pollFirst()
+            val elapsedMs = request?.let { System.currentTimeMillis() - it.startedAt }
+            val method = request?.method ?: "?"
+            val pathPreview = request?.path?.take(80) ?: "?"
+            if (elapsedMs != null) {
+                reportState("mitm resp $host $statusCode (${elapsedMs}ms) $method $pathPreview")
+            } else {
+                reportState("mitm resp $host $statusCode $method $pathPreview")
+            }
+
+            writeAsciiLine(output, statusLineText)
+            headers.forEach { writeAsciiLine(output, "${it.name}: ${it.value}") }
+            writeAsciiLine(output, "")
+
+            if (statusCode == 101) {
+                // Switching Protocols：之后是非 HTTP 帧（WebSocket / H2C 等）。
+                // 通知请求方向也切到 raw，然后这里跳出循环走透传。
+                upgraded.set(true)
+                output.flush()
+                break
+            }
+
+            val noBody = informational ||
+                statusCode == 204 ||
+                statusCode == 304 ||
+                method.equals("HEAD", ignoreCase = true)
+            if (!noBody) {
+                val contentLength = headers.contentLength()
+                val chunked = headers.isChunked()
+                when {
+                    chunked -> copyChunkedBody(input, output)
+                    contentLength != null -> {
+                        if (contentLength > 0) copyFixedLength(input, output, contentLength)
+                    }
+                    else -> {
+                        // 既无 Content-Length 也非 chunked —— HTTP/1.0 风格，body 到 EOF。
+                        // 直接 pump 完后这条 TLS 连接也该结束了。
+                        output.flush()
+                        pumpRawBytes(input, output)
+                        return
+                    }
+                }
+            }
+            output.flush()
+        }
+        if (upgraded.get()) {
+            pumpRawBytes(input, output)
+        }
+    }
+
+    private fun pumpRawBytes(input: InputStream, output: OutputStream) {
+        val buffer = ByteArray(16 * 1024)
+        while (true) {
+            val read = input.read(buffer)
+            if (read == -1) break
+            output.write(buffer, 0, read)
+            output.flush()
+        }
+    }
+
+    private fun parseStatusCode(statusLine: String): Int {
+        val parts = statusLine.split(' ', limit = 3)
+        return parts.getOrNull(1)?.toIntOrNull() ?: -1
+    }
+
     private fun shouldMitm(host: String, port: Int): Boolean {
         if (port != 443) return false
         return isMitmHost(host)
@@ -340,18 +559,40 @@ class LocalPixivProxy(
         val socket = (serverSslContextFor(host).socketFactory.createSocket(client, host, client.port, false) as SSLSocket)
         socket.useClientMode = false
         socket.needClientAuth = false
+        forceHttp11Alpn(socket)
         socket.startHandshake()
         return socket
     }
 
     private fun createUpstreamTlsSocket(upstream: Socket, host: String, port: Int): SSLSocket {
+        // peerHost 必须传 IP literal：JSSE 看到 IP 就会把 SNI 扩展整个略掉（RFC 6066
+        // 不允许 SNI 是 IP）。GFW 的 SNI DPI 没有 www.pixiv.net 可匹配，就不会注 RST。
+        // 一旦把 hostname 传进去或者显式 serverNames=SNIHostName(host)，墙立刻命中。
+        // 配对依赖：www.pixiv.net 的候选 IP 必须来自 Pixiv Tokyo 段（见 PixivDnsUpdater），
+        // CF 节点没有 SNI 是无法路由的。
         val dialHost = upstream.inetAddress.hostAddress ?: host
-        reportState("upstream tls strategy direct-ip $host via $dialHost:$port")
-        val socket = (PixivUnsafeTls.socketFactory().createSocket(upstream, dialHost, port, true) as SSLSocket)
+        reportState("upstream tls strategy no-sni $host via $dialHost:$port")
+        val socket = (clientSslContext.socketFactory.createSocket(upstream, dialHost, port, true) as SSLSocket)
         socket.useClientMode = true
         socket.enabledProtocols = socket.supportedProtocols
+        forceHttp11Alpn(socket)
         socket.startHandshake()
         return socket
+    }
+
+    /**
+     * 强制 ALPN 只剩 http/1.1，这样上下游协商出来一定是 1.1 文本协议——MITM 里能直接按行
+     * 解析 [proxyMitmHttp]。不强制的话 conscrypt 会拿到 h2，框架二进制 + HPACK 没办法
+     * 在不引依赖的前提下做日志。`setApplicationProtocols` 是 API 29 才进 JDK 的，
+     * 通过反射兜底，旧机型上拿不到方法就直接放过，连接仍按默认协议跑只是少一份诊断。
+     */
+    private fun forceHttp11Alpn(socket: SSLSocket) {
+        runCatching {
+            val params = socket.sslParameters
+            params.javaClass.getMethod("setApplicationProtocols", Array<String>::class.java)
+                .invoke(params, arrayOf("http/1.1"))
+            socket.sslParameters = params
+        }
     }
 
     private fun serverSslContextFor(host: String): SSLContext {
@@ -702,6 +943,15 @@ class LocalPixivProxy(
         Log.d(TAG, message)
     }
 
+    /**
+     * 供 WebViewClient 等外部回调写诊断用。
+     * onReceivedSslError 内部不能直接动 private 的 reportState，借此入口把每次
+     * 信任决策（proceed / cancel + host + 原因）落到统一的事件流里。
+     */
+    fun noteWebViewEvent(message: String) {
+        reportState(message)
+    }
+
     private fun reportError(stage: String, throwable: Throwable) {
         val chain = buildString {
             var current: Throwable? = throwable
@@ -744,36 +994,68 @@ class LocalPixivProxy(
         val originTarget: String,
     )
 
+    private data class MitmRequest(
+        val method: String,
+        val path: String,
+        val startedAt: Long,
+    )
+
     companion object {
-        val MITM_EXACT_HOSTS = setOf(
+        // 所有 pixiv 自家域名一律 MITM——透明 CONNECT 会被 GFW 的 SNI DPI 直接 RST，
+        // 5 秒拨号反复超时就是用户报的"大量等待"。靠白名单穷举子域（embed / fanbox 商品页
+        // / 新拆出来的子站）永远赶不上运营节奏，按 eTLD+1 后缀放行更稳。
+        // d.pixiv.org 单独列：是 pixiv 自家但 TLD 不一样。被 BLOCKED_EXACT_HOSTS 拦下来的
+        // a.pixiv.org / lc-event.pixiv.net 已经在 isBlockedHost 阶段 502 短路，不会落到这里。
+        val MITM_HOST_SUFFIXES: List<String> = listOf(
             "pixiv.net",
             "pximg.net",
-            "d.pixiv.org",
-            "i.pximg.net",
-            "s.pximg.net",
-            "i1.pixiv.net",
-            "i2.pixiv.net",
-            "i3.pixiv.net",
-            "i4.pixiv.net",
-            "www.pixiv.net",
-            "dic.pixiv.net",
-            "touch.pixiv.net",
-            "imgaz.pixiv.net",
-            "comic.pixiv.net",
-            "novel.pixiv.net",
             "pixivsketch.net",
-            "pixiv.pximg.net",
-            "source.pixiv.net",
-            "sketch.pixiv.net",
-            "sensei.pixiv.net",
-            "en-dic.pixiv.net",
-            "fanbox.pixiv.net",
-            "app-api.pixiv.net",
-            "factory.pixiv.net",
-            "payment.pixiv.net",
-            "accounts.pixiv.net",
-            "oauth.secure.pixiv.net",
-            "g-client-proxy.pixiv.net",
+        )
+
+        val MITM_EXACT_HOSTS: Set<String> = setOf(
+            "d.pixiv.org",
+        )
+
+        // 把 reCAPTCHA 的入口域改投到 recaptcha.net——Google 为被 GFW 屏蔽的地区准备的官方
+        // 替身域名。只换 TCP 拨号目标，client 看到的 URL/Host 仍然是 www.google.com；
+        // recaptcha.net 后端会按原路径服务相同的脚本，登录就不会卡在人机验证。
+        // 证书不匹配由 WebView 的 onReceivedSslError -> proceed() 兜底。
+        val HOST_REWRITES: Map<String, String> = mapOf(
+            "www.google.com" to "www.recaptcha.net",
+            "google.com" to "www.recaptcha.net",
+            "recaptcha.google.com" to "www.recaptcha.net",
+        )
+
+        // pixiv 页面里夹带的广告 / 统计 / 社交分享，墙内都拨不通；让透明隧道去试就是 20 秒
+        // 起步的超时，单条页面要等好几次。直接 502 短路，DOMContentLoaded 后的子资源就能立刻
+        // 结束。reCAPTCHA 用的 gstatic / googleapis 不进这张表，留给系统 DNS 自己试。
+        val BLOCKED_HOST_SUFFIXES: List<String> = listOf(
+            "google-analytics.com",
+            "googletagmanager.com",
+            "googletagservices.com",
+            "googleadservices.com",
+            "googlesyndication.com",
+            "doubleclick.net",
+            "criteo.com",
+            "criteo.net",
+            "ads-pixiv.net",
+            "facebook.com",
+            "facebook.net",
+            "fbcdn.net",
+            "twitter.com",
+            "twimg.com",
+            "t.co",
+        )
+
+        // 精准匹配。*.google.com 不能整段砍——www.google.com 留给 reCAPTCHA 改写；
+        // a.pixiv.org / lc-event.pixiv.net 属于在主域下的分析端点，suffix 表会误伤
+        // pixiv.net 主体，必须按完整 host 拦。
+        val BLOCKED_EXACT_HOSTS: Set<String> = setOf(
+            "fundingchoicesmessages.google.com",
+            "adservice.google.com",
+            "pagead.googlesyndication.com",
+            "a.pixiv.org",
+            "lc-event.pixiv.net",
         )
 
         val secureRandom = SecureRandom()
@@ -838,26 +1120,28 @@ class LocalPixivProxy(
         }
 
         fun isMitmHost(host: String?): Boolean {
-            return normalizeHost(host) in MITM_EXACT_HOSTS
+            val normalized = normalizeHost(host) ?: return false
+            if (normalized in MITM_EXACT_HOSTS) return true
+            return MITM_HOST_SUFFIXES.any { suffix ->
+                normalized == suffix || normalized.endsWith(".$suffix")
+            }
+        }
+
+        fun rewriteHost(host: String?): String? {
+            val normalized = normalizeHost(host) ?: return null
+            return HOST_REWRITES[normalized]
+        }
+
+        fun isBlockedHost(host: String?): Boolean {
+            val normalized = normalizeHost(host) ?: return false
+            if (normalized in BLOCKED_EXACT_HOSTS) return true
+            return BLOCKED_HOST_SUFFIXES.any { suffix ->
+                normalized == suffix || normalized.endsWith(".$suffix")
+            }
         }
 
         fun normalizeHost(host: String?): String? {
             return host?.trim()?.lowercase(Locale.US)?.removeSuffix(".")?.takeIf { it.isNotEmpty() }
-        }
-
-        fun X509Certificate.matchesHost(host: String): Boolean {
-            val dnsNames = subjectAlternativeNames
-                ?.mapNotNull { name ->
-                    val type = name.getOrNull(0) as? Int
-                    val value = name.getOrNull(1) as? String
-                    value?.takeIf { type == GeneralName.dNSName }
-                }
-                .orEmpty()
-            if (dnsNames.isNotEmpty()) return host in dnsNames.map { it.lowercase(Locale.US).removeSuffix(".") }
-            return subjectX500Principal.name
-                .split(',')
-                .map { it.trim() }
-                .any { it.equals("CN=$host", ignoreCase = true) }
         }
 
         val bundledBouncyCastleProvider: Provider by lazy {

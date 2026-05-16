@@ -5,6 +5,17 @@
             <certificates src="system" />
         </trust-anchors>
     </base-config>
+    <domain-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+        <domain includeSubdomains="true">pixiv.net</domain>
+        <domain includeSubdomains="true">pximg.net</domain>
+        <domain includeSubdomains="true">pixiv.org</domain>
+        <domain includeSubdomains="true">pixivsketch.net</domain>
+        <domain includeSubdomains="true">pixivision.net</domain>
+    </domain-config>
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="false">127.0.0.1</domain>
         <domain includeSubdomains="false">localhost</domain>

@@ -1,22 +1,27 @@
 package JunZi.Pixiv.data.network
 
+/**
+ * 已知的 Pixiv 域名清单。
+ *
+ * 这里**不再保留任何兜底 IP**——所有可路由 IP 由 [PixivDnsUpdater] 在运行时
+ * 通过外部 DoH 端点拉回来，写入 [PixivNetworkConfig.hostToIps]。运行时表为空
+ * 时（首次启动且 DoH 还没回来、或 DoH 整个挂掉），调用方应回退到系统 DNS，
+ * 而不是回到 APK 里固化的"过期 IP"——这正是把 210.140.131.199 长期排在
+ * 候选首位、把 MITM 拖慢 N×20 秒的根因。
+ */
 enum class PixivHost(
     val rawHost: String,
-    val defaultIp: String,
     val isApiHost: Boolean,
-    private val fallbackIps: List<String> = emptyList(),
 ) {
-    AppApi("app-api.pixiv.net", "210.140.139.158", true, listOf("210.140.139.161", "210.140.139.155", "210.140.139.152")),
-    OAuth("oauth.secure.pixiv.net", "210.140.139.158", true, listOf("210.140.139.161", "210.140.139.155", "210.140.139.152")),
-    Accounts("accounts.pixiv.net", "210.140.139.158", true, listOf("210.140.139.161", "210.140.139.155", "210.140.139.152")),
-    Source("source.pixiv.net", "210.140.139.158", true, listOf("210.140.139.161", "210.140.139.155", "210.140.139.152")),
-    PublicApi("public-api.secure.pixiv.net", "210.140.139.158", true, listOf("210.140.139.161", "210.140.139.152", "210.140.139.155")),
-    Image("i.pximg.net", "210.140.139.133", false),
-    StaticImage("s.pximg.net", "210.140.139.133", false),
-    Pixivision("www.pixivision.net", "210.140.131.224", false),
-    Web("www.pixiv.net", "210.140.131.199", false, listOf("210.140.139.158", "104.18.12.135", "104.18.13.135"));
-
-    val defaultIps: List<String> = (listOf(defaultIp) + fallbackIps).distinct()
+    AppApi("app-api.pixiv.net", true),
+    OAuth("oauth.secure.pixiv.net", true),
+    Accounts("accounts.pixiv.net", true),
+    Source("source.pixiv.net", true),
+    PublicApi("public-api.secure.pixiv.net", true),
+    Image("i.pximg.net", false),
+    StaticImage("s.pximg.net", false),
+    Pixivision("www.pixivision.net", false),
+    Web("www.pixiv.net", false);
 
     companion object {
         private val byHost = entries.associateBy { it.rawHost }

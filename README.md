@@ -17,14 +17,15 @@ IllustFerry（画渡）是一个面向 pixiv 的非官方 Android 客户端实�
 - 下载：多图作品保留全部分页，已下载内容支持离线本地预览；GIF / 动 WebP 预览保持动画播放。
 - 动图：支持 WebP / GIF 输出，并可按需额外保留 pixiv 原始 zip。
 - 设置：Host/IP 路由、图片代理、过滤标签、预览方向、动图格式、保留 zip、网络诊断和开源许可查看。
+- 实验功能：设置页可进入"Web Pixiv"，使用应用内置代理 WebView 直接访问 pixiv.net 官网。
 
 ## 网络兼容设计
 
 网络层是本项目的核心：
 
-- `LocalPixivProxy`：应用内 WebView 登录代理。
-- `PixivHost` / `PixivNetworkConfig`：pixiv Host 与 IP fallback 配置。
-- `PixivDnsUpdater`：刷新部分 Host 的可用 IP。
+- `LocalPixivProxy`：应用内 WebView 登录代理 / 浏览代理。
+- `PixivHost` / `PixivNetworkConfig`：pixiv Host 与运行时 IP 配置。
+- `PixivDnsUpdater`：通过外部 DoH 端点实时刷新可用 IP。
 - `PixivDns` / `OkHttpProvider`：让 OkHttp 请求使用项目内 Host/IP 配置。
 - `PixivImageProxy`：处理图片直连、备用 Host、默认远端代理与手动代理候选。
 - `PixivUnsafeTls`：为兼容路径放宽证书与 Hostname 校验。
