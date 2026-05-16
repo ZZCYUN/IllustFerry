@@ -48,6 +48,10 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Locale
 
+private fun nonBlankStringOrNull(value: String?): String? {
+    return value?.takeIf { it.isNotBlank() }
+}
+
 enum class AppScreen {
     Login,
     WebLogin,
@@ -282,6 +286,7 @@ data class PuxivUiState(
     val trendingTags: List<TrendingTag> = emptyList(),
     val items: List<Illust> = emptyList(),
     val nextUrl: String? = null,
+    val isSearchActive: Boolean = false,
     val selectedIllust: Illust? = null,
     val selectedImageIndex: Int = 0,
     val related: FeedState = FeedState(),
@@ -296,7 +301,6 @@ data class PuxivUiState(
     val imageProxyInput: String = PixivImageProxy.DEFAULT_PROXY_ORIGIN,
     val saveUgoiraZip: Boolean = false,
     val filteredTagsInput: String = "",
-    val useWaterfall: Boolean = true,
     val ugoiraSaveFormat: UgoiraSaveFormat = UgoiraSaveFormat.WEBP,
     val isBusy: Boolean = false,
     val isTrendingLoading: Boolean = false,
@@ -443,10 +447,6 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
         search()
-    }
-
-    fun toggleLayout() {
-        _uiState.update { it.copy(useWaterfall = !it.useWaterfall) }
     }
 
     fun openHome() {
@@ -784,6 +784,20 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
         }
         navigateTo(AppScreen.Search)
         search()
+    }
+
+    fun returnToDiscover() {
+        _uiState.update {
+            it.copy(
+                keyword = "",
+                items = emptyList(),
+                nextUrl = null,
+                isSearchActive = false,
+                isLoadingMore = false,
+                message = null,
+            )
+        }
+        loadDiscover(refresh = false)
     }
 
     fun loadHome(refresh: Boolean = true) {
@@ -1300,6 +1314,14 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
+        _uiState.update {
+            it.copy(
+                items = emptyList(),
+                nextUrl = null,
+                isSearchActive = true,
+                isLoadingMore = false,
+            )
+        }
         viewModelScope.launch {
             runBusy {
                 val page = withAccessToken {
@@ -1325,7 +1347,12 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
                     ) {
                         current
                     } else {
-                        current.copy(items = filteredPage.items, nextUrl = filteredPage.nextUrl, message = null)
+                        current.copy(
+                            items = filteredPage.items,
+                            nextUrl = filteredPage.nextUrl,
+                            isSearchActive = true,
+                            message = null,
+                        )
                     }
                 }
             }
@@ -1625,7 +1652,7 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
 
     fun openDownloadedPreview(item: DownloadItem) {
         val savedUris = item.savedUris.orEmpty()
-            .mapNotNull { it?.takeIf { value -> value.isNotBlank() } }
+            .mapNotNull(::nonBlankStringOrNull)
             .ifEmpty { listOfNotNull(item.savedUri?.takeIf { it.isNotBlank() }) }
         val firstSavedUri = savedUris.firstOrNull()
         if (firstSavedUri == null) {
@@ -2006,6 +2033,7 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
                 discover = DiscoverState(),
                 items = emptyList(),
                 nextUrl = null,
+                isSearchActive = false,
                 selectedIllust = null,
                 related = FeedState(),
                 comments = CommentState(),
@@ -2553,7 +2581,7 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
         val state = _uiState.value
         return state.screen == AppScreen.Search &&
             state.keyword.isNotBlank() &&
-            state.items.isNotEmpty() &&
+            state.isSearchActive &&
             !state.isBusy
     }
 

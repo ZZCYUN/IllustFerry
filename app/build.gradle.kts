@@ -11,8 +11,8 @@ android {
         applicationId = "JunZi.Pixiv"
         minSdk = 26
         targetSdk = 36
-        versionCode = 3
-        versionName = "1.0.0"
+        versionCode = 4
+        versionName = "1.0.1"
     }
 
     splits {
@@ -80,8 +80,8 @@ dependencies {
     implementation("com.github.bumptech.glide:okhttp3-integration:5.0.7")
     implementation("com.github.bumptech.glide:gifencoder-integration:5.0.7")
     implementation("com.aureusapps.android:webp-android:1.1.2")
-    implementation("org.bouncycastle:bcprov-jdk18on:1.81")
-    implementation("org.bouncycastle:bcpkix-jdk18on:1.81")
+    implementation("org.bouncycastle:bcprov-jdk18on:1.84")
+    implementation("org.bouncycastle:bcpkix-jdk18on:1.84")
     annotationProcessor("com.github.bumptech.glide:compiler:5.0.7")
 
     debugImplementation("androidx.compose.ui:ui-tooling")

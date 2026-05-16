@@ -9,6 +9,14 @@ import androidx.core.content.edit
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 
+private fun nonBlankStringOrNull(value: String?): String? {
+    return value?.takeIf { it.isNotBlank() }
+}
+
+private fun DownloadStatus?.orFailed(): DownloadStatus {
+    return this ?: DownloadStatus.Failed
+}
+
 class TokenStore(context: Context) {
     private val preferences = context.getSharedPreferences("puxiv_auth", Context.MODE_PRIVATE)
     private val gson = Gson()
@@ -142,12 +150,12 @@ class TokenStore(context: Context) {
 
     private fun DownloadItem.normalized(): DownloadItem {
         val cleanSavedUris = savedUris.orEmpty()
-            .mapNotNull { it?.takeIf { value -> value.isNotBlank() } }
+            .mapNotNull(::nonBlankStringOrNull)
             .ifEmpty { listOfNotNull(savedUri?.takeIf { it.isNotBlank() }) }
         return copy(
             title = title.orEmpty(),
             fileName = fileName.orEmpty(),
-            status = status ?: DownloadStatus.Failed,
+            status = status.orFailed(),
             pageCount = pageCount.coerceAtLeast(cleanSavedUris.size.coerceAtLeast(1)),
             relativePath = relativePath.orEmpty(),
             detail = detail.orEmpty(),

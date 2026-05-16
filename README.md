@@ -2,22 +2,21 @@
 
 IllustFerry（画渡）是一个面向 pixiv 的非官方 Android 客户端实验项目，面向中文用户在复杂网络环境中的日常浏览体验，重点是本地网络兼容代理、可配置 Host IP 路由、图片加载 fallback，以及 Jetpack Compose 客户端界面。
 
-本项目与 pixiv Inc. 无关，不包含 pixiv 作品内容、用户数据、调试日志、静态证书或私钥。
+本项目与 pixiv Inc. 无关，不包含 pixiv 作品内容、用户数据、调试日志或固定代理 CA / 代理私钥。仓库中的 Android 测试签名配置仅用于调试和打包示例，正式分发请替换为自己的签名密钥。
 
 ## 功能
 
-- 应用内 WebView 登录代理，用于改善登录链路稳定性。
-- 运行时生成内存 CA，不随仓库或安装包分发固定代理证书。
-- pixiv 相关 Host 的内置 IP、备用 IP 与 DNS 刷新。
-- API 请求 Host/IP 兼容路由。
-- 图片直连、备用 Host、默认远端图片代理与可手动填写的图片代理 fallback。
-- 首页推荐、排行榜、最新作品与搜索。
-- 作品详情、相关作品、评论、收藏、浏览历史与下载队列。
-- 个人作品、收藏列表与基础投稿面板。
-- 已下载内容支持离线本地预览，多图下载会保留全部分页，GIF / 动 WebP 预览保持动画播放。
-- 动图下载支持 WebP / GIF 输出，并可按需额外保留 pixiv 原始 zip。
-- 设置页支持图片代理、过滤标签、预览方向、动图格式和开源许可查看。
-- 网络诊断面板，用于检查 DNS、API 与图片访问状态。
+- 登录：应用内 WebView OAuth 登录代理、手动 token 登录、运行时生成内存 CA，不分发固定代理证书。
+- 网络兼容：pixiv 相关 Host 的内置 IP、备用 IP、DNS 刷新、API Host/IP 兼容路由，以及图片直连 / 备用 Host / 远端图片代理 fallback。
+- 首页：推荐、排行榜、最新作品和搜索入口。
+- 发现：公开关注作品、悄悄关注作品、趋势标签、标签/标题/作者搜索、热门预览、搜索结果分页自动加载，并可从搜索结果返回关注作品列表。
+- 搜索筛选：搜索目标、排序方式、日期范围、收藏数阈值等参数会随搜索刷新。
+- 作品预览：作品详情、横向翻页或纵向连续阅读、全屏半透明顶栏预览、相关作品、评论、收藏和下载。
+- 作者页：查看作者资料、插画/漫画作品分页、关注、悄悄关注与取消关注。
+- 我的：个人作品、收藏列表、浏览历史、公开/悄悄关注用户列表、下载记录和基础投稿面板。
+- 下载：多图作品保留全部分页，已下载内容支持离线本地预览；GIF / 动 WebP 预览保持动画播放。
+- 动图：支持 WebP / GIF 输出，并可按需额外保留 pixiv 原始 zip。
+- 设置：Host/IP 路由、图片代理、过滤标签、预览方向、动图格式、保留 zip、网络诊断和开源许可查看。
 
 ## 网络兼容设计
 
@@ -59,29 +58,26 @@ echo json_encode($ips);
 
 ## 技术栈
 
-- Kotlin
-- Jetpack Compose
-- Material 3
-- AndroidX Activity Compose
-- AndroidX Core KTX
-- AndroidX Lifecycle Runtime Compose
-- AndroidX Lifecycle ViewModel Compose
-- AndroidX WebKit
-- Kotlin Coroutines Android
-- OkHttp
-- Gson
-- Glide
-- Glide OkHttp integration
-- Glide GIF Encoder integration
-- webp-android
-- Bouncy Castle `bcprov-jdk18on`
-- Bouncy Castle `bcpkix-jdk18on`
+主要运行时与应用依赖：
+
+- Kotlin 与 Kotlin Coroutines Android 1.11.0
+- Jetpack Compose BOM 2026.05.00、Compose UI / Foundation、Material 3、Material Icons Extended
+- AndroidX Activity Compose 1.13.0
+- AndroidX Core KTX 1.18.0
+- AndroidX Lifecycle Runtime Compose / ViewModel Compose 2.10.0
+- AndroidX WebKit 1.16.0
+- OkHttp 5.3.2
+- Gson 2.14.0
+- Glide 5.0.7、Glide OkHttp integration、Glide GIF Encoder integration、Glide compiler
+- webp-android 1.1.2
+- Bouncy Castle `bcprov-jdk18on` / `bcpkix-jdk18on` 1.84
 
 构建相关：
 
-- Android Gradle Plugin 9.0.1
-- Kotlin Compose plugin 2.2.10
-- Gradle 9.1.0
+- Java 17
+- Android Gradle Plugin 9.2.1
+- Kotlin Compose plugin 2.3.21
+- Gradle 9.5.1
 - compileSdk 36
 - minSdk 26
 - targetSdk 36
@@ -116,10 +112,11 @@ app/build/outputs/apk/release/
 
 ## 使用
 
-1. 安装 Debug APK。
-2. 使用 OAuth code 登录，或手动填入 access token。
-3. 在设置页刷新 DNS、运行网络诊断，并按需切换或手动填写图片代理。
-4. 在作品详情页下载图片或动图，已下载内容可在“我的 / 下载”中离线预览。
+1. 安装 APK。
+2. 使用应用内 WebView OAuth 登录，或手动填入 access token。
+3. 在设置页按需开启 Host/IP 兼容路由、刷新 DNS、运行网络诊断，并配置图片代理。
+4. 在首页、发现页或作者页浏览作品；搜索结果可分页自动加载，也可以返回关注作品列表。
+5. 在作品详情页下载图片或动图，已下载内容可在“我的 / 下载”中离线预览。
 
 Token 保存在本应用的 Android `SharedPreferences` 中。请勿公开包含账号信息的日志、截图或备份。
 
@@ -127,8 +124,12 @@ Token 保存在本应用的 Android `SharedPreferences` 中。请勿公开包含
 
 本项目仅供学习、研究与个人使用。请尊重创作者权益，遵守 pixiv 相关条款与所在地法律法规，不要用于批量抓取、未经授权转载、账号滥用或其他不当用途。
 
+网络兼容功能会按设置使用内置 Host/IP 映射、远端图片代理和兼容 TLS 路径。启用这些功能前，请确认自己理解对应的网络与信任边界。
+
 ## 许可证
 
-本项目使用 GNU General Public License v3.0（GPL-3.0）授权。
+本项目使用 GNU General Public License v3.0 only（GPL-3.0-only）授权，授权标识见仓库根目录的 `LICENSE`。
 
 任何人使用、复制、修改、分发或基于本项目发布衍生版本时，都必须遵守 GPL-3.0 的全部条款。二次分发修改版时，必须继续以 GPL-3.0 兼容方式开放对应源码，并保留原始版权与许可证声明。
+
+第三方依赖的许可证请以各项目原始许可证为准；应用内“设置 / 开源许可”列出了主要运行时依赖及其许可证入口。

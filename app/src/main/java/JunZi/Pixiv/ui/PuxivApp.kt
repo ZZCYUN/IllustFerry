@@ -138,7 +138,6 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material.icons.filled.ViewAgenda
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -298,7 +297,7 @@ fun PuxivApp(viewModel: PixivViewModel) {
                     trendingTags = state.trendingTags,
                     discover = state.discover,
                     items = state.items,
-                    useWaterfall = state.useWaterfall,
+                    isSearchActive = state.isSearchActive,
                     isLoadingMore = state.isLoadingMore,
                     nextUrl = state.nextUrl,
                     session = state.session,
@@ -395,7 +394,7 @@ private fun MainShell(
     trendingTags: List<TrendingTag>,
     discover: DiscoverState,
     items: List<Illust>,
-    useWaterfall: Boolean,
+    isSearchActive: Boolean,
     isLoadingMore: Boolean,
     nextUrl: String?,
     session: AuthSession?,
@@ -516,7 +515,7 @@ private fun MainShell(
                         trendingTags = trendingTags,
                         discover = discover,
                         items = items,
-                        useWaterfall = useWaterfall,
+                        isSearchActive = isSearchActive,
                         isLoadingMore = isLoadingMore,
                         nextUrl = nextUrl,
                         contentPadding = padding,
@@ -527,7 +526,7 @@ private fun MainShell(
                         onSearchTargetChange = viewModel::updateSearchTarget,
                         onPopularPreview = viewModel::loadPopularPreview,
                         onTrendingTagClick = viewModel::searchTrendingTag,
-                        onToggleLayout = viewModel::toggleLayout,
+                        onReturnToDiscover = viewModel::returnToDiscover,
                         onOpenPreview = viewModel::openPreview,
                         onRefreshDiscover = { viewModel.loadDiscover(refresh = true) },
                         onLoadMoreDiscover = viewModel::loadDiscoverFeed,
@@ -3042,7 +3041,7 @@ private fun OpenSourceLicenseSection() {
                         fontWeight = FontWeight.SemiBold,
                     )
                     Text(
-                        text = "GPL-3.0 开源协议",
+                        text = "GPL-3.0-only 开源协议",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -3109,9 +3108,9 @@ private data class OpenSourceLibrary(
 
 private val OpenSourceLibraries = listOf(
     OpenSourceLibrary(
-        name = "IllustFerry",
-        license = "GNU General Public License v3.0",
-        licenseUrl = "https://www.gnu.org/licenses/gpl-3.0.html",
+        name = "Kotlin",
+        license = "Apache License 2.0",
+        licenseUrl = "https://github.com/JetBrains/kotlin/blob/master/license/LICENSE.txt",
     ),
     OpenSourceLibrary(
         name = "AndroidX Activity / Core / Lifecycle / WebKit",
@@ -3172,7 +3171,7 @@ private fun SearchScreen(
     trendingTags: List<TrendingTag>,
     discover: DiscoverState,
     items: List<Illust>,
-    useWaterfall: Boolean,
+    isSearchActive: Boolean,
     isLoadingMore: Boolean,
     nextUrl: String?,
     contentPadding: PaddingValues,
@@ -3183,7 +3182,7 @@ private fun SearchScreen(
     onSearchTargetChange: (SearchTarget) -> Unit,
     onPopularPreview: () -> Unit,
     onTrendingTagClick: (TrendingTag) -> Unit,
-    onToggleLayout: () -> Unit,
+    onReturnToDiscover: () -> Unit,
     onOpenPreview: (Illust) -> Unit,
     onRefreshDiscover: () -> Unit,
     onLoadMoreDiscover: (DiscoverFeed, Boolean) -> Unit,
@@ -3191,6 +3190,22 @@ private fun SearchScreen(
     val searchGridState = rememberLazyStaggeredGridState()
     val decorativeFeedSemantics = rememberDecorativeFeedSemantics()
     val resultGridState = rememberLazyStaggeredGridState()
+
+    LaunchedEffect(isSearchActive, nextUrl, isLoadingMore, isBusy, items.size) {
+        if (!isSearchActive) return@LaunchedEffect
+        snapshotFlow {
+            val layoutInfo = resultGridState.layoutInfo
+            val lastVisibleIndex = layoutInfo.visibleItemsInfo.maxOfOrNull { it.index } ?: -1
+            layoutInfo.totalItemsCount > 0 && lastVisibleIndex >= layoutInfo.totalItemsCount - 3
+        }
+            .distinctUntilChanged()
+            .collect { shouldLoadMore ->
+                if (shouldLoadMore && nextUrl != null && !isLoadingMore && !isBusy) {
+                    onLoadMore()
+                }
+            }
+    }
+
     Scaffold(
         modifier = Modifier.padding(contentPadding),
         topBar = {
@@ -3199,7 +3214,11 @@ private fun SearchScreen(
                     Column {
                         Text("发现")
                         Text(
-                            text = "${discover.publicWorks.items.size + discover.privateWorks.items.size} 关注作品 · ${items.size} 搜索结果",
+                            text = if (isSearchActive) {
+                                "${items.size} 搜索结果"
+                            } else {
+                                "${discover.publicWorks.items.size + discover.privateWorks.items.size} 关注作品"
+                            },
                             style = MaterialTheme.typography.labelLarge,
                             color = MaterialTheme.colorScheme.secondary,
                             maxLines = 1,
@@ -3207,49 +3226,11 @@ private fun SearchScreen(
                         )
                     }
                 },
-                actions = {
-                    IconButton(onClick = onToggleLayout) {
-                        Icon(
-                            imageVector = if (useWaterfall) Icons.Default.GridView else Icons.Default.ViewAgenda,
-                            contentDescription = "切换布局",
-                        )
-                    }
-                },
             )
         },
         contentWindowInsets = WindowInsets.safeDrawing,
     ) { padding ->
-        if (items.isEmpty() && !isBusy) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding),
-            ) {
-                SearchControlPanel(
-                    keyword = keyword,
-                    isBusy = isBusy,
-                    searchTarget = searchTarget,
-                    searchSort = searchSort,
-                    isTrendingLoading = isTrendingLoading,
-                    trendingTags = trendingTags,
-                    onKeywordChange = onKeywordChange,
-                    onSearch = onSearch,
-                    onSearchSortChange = onSearchSortChange,
-                    onSearchTargetChange = onSearchTargetChange,
-                    onPopularPreview = onPopularPreview,
-                    onTrendingTagClick = onTrendingTagClick,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-                )
-                DiscoverContent(
-                    discover = discover,
-                    trendingTags = trendingTags,
-                    onRefresh = onRefreshDiscover,
-                    onLoadMore = onLoadMoreDiscover,
-                    onOpenPreview = onOpenPreview,
-                    modifier = Modifier.weight(1f),
-                )
-            }
-        } else if (useWaterfall) {
+        if (!isSearchActive) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -3280,25 +3261,13 @@ private fun SearchScreen(
                             onTrendingTagClick = onTrendingTagClick,
                         )
                     }
-                    items(
-                        items,
-                        key = { it.id },
-                        contentType = { "illust-card" },
-                    ) { illust ->
-                        IllustCard(
-                            illust = illust,
-                            clearSemantics = decorativeFeedSemantics,
-                            onClick = onOpenPreview,
-                        )
-                    }
-                    item(span = StaggeredGridItemSpan.FullLine) {
-                        PagingFooter(
-                            isLoadingMore = isLoadingMore,
-                            nextUrl = nextUrl,
-                            hasItems = items.isNotEmpty(),
-                            onLoadMore = onLoadMore,
-                        )
-                    }
+                    discoverItems(
+                        discover = discover,
+                        onRefresh = onRefreshDiscover,
+                        onLoadMore = onLoadMoreDiscover,
+                        onOpenPreview = onOpenPreview,
+                        clearSemantics = decorativeFeedSemantics,
+                    )
                 }
             }
         } else {
@@ -3332,25 +3301,37 @@ private fun SearchScreen(
                             onTrendingTagClick = onTrendingTagClick,
                         )
                     }
-                    items(
-                        items,
-                        key = { it.id },
-                        contentType = { "illust-card" },
-                    ) { illust ->
-                        IllustCard(
-                            illust = illust,
-                            forceSquare = true,
-                            clearSemantics = decorativeFeedSemantics,
-                            onClick = onOpenPreview,
+                    item(span = StaggeredGridItemSpan.FullLine) {
+                        SearchResultHeader(
+                            resultCount = items.size,
+                            isBusy = isBusy,
+                            onBack = onReturnToDiscover,
                         )
                     }
-                    item(span = StaggeredGridItemSpan.FullLine) {
-                        PagingFooter(
-                            isLoadingMore = isLoadingMore,
-                            nextUrl = nextUrl,
-                            hasItems = items.isNotEmpty(),
-                            onLoadMore = onLoadMore,
-                        )
+                    if (items.isEmpty() && !isBusy) {
+                        item(span = StaggeredGridItemSpan.FullLine) {
+                            EmptySearch(Modifier.fillMaxWidth())
+                        }
+                    } else {
+                        items(
+                            items,
+                            key = { it.id },
+                            contentType = { "illust-card" },
+                        ) { illust ->
+                            IllustCard(
+                                illust = illust,
+                                clearSemantics = decorativeFeedSemantics,
+                                onClick = onOpenPreview,
+                            )
+                        }
+                        item(span = StaggeredGridItemSpan.FullLine) {
+                            PagingFooter(
+                                isLoadingMore = isLoadingMore,
+                                nextUrl = nextUrl,
+                                hasItems = items.isNotEmpty(),
+                                onLoadMore = onLoadMore,
+                            )
+                        }
                     }
                 }
             }
@@ -3388,25 +3369,26 @@ private fun SearchControlPanel(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                OutlinedTextField(
+                PixivSearchField(
                     value = keyword,
                     onValueChange = onKeywordChange,
-                    modifier = Modifier.weight(1f),
-                    label = { Text("标签、标题、作者") },
-                    shape = RoundedCornerShape(8.dp),
-                    singleLine = true,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp),
+                    placeholder = "标签、标题、作者",
+                    onSearch = onSearch,
                 )
                 IconButton(
                     onClick = onSearch,
                     enabled = !isBusy,
                     modifier = Modifier
-                        .size(54.dp)
+                        .size(48.dp)
                         .clip(RoundedCornerShape(8.dp))
                         .background(MaterialTheme.colorScheme.primary),
                 ) {
                     if (isBusy) {
                         CircularProgressIndicator(
-                            modifier = Modifier.size(22.dp),
+                            modifier = Modifier.size(20.dp),
                             color = MaterialTheme.colorScheme.onPrimary,
                             strokeWidth = 2.dp,
                         )
@@ -3524,88 +3506,113 @@ private fun TrendingTagRail(
 }
 
 @Composable
-private fun DiscoverContent(
+private fun SearchResultHeader(
+    resultCount: Int,
+    isBusy: Boolean,
+    onBack: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TextButton(onClick = onBack) {
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text("返回关注")
+            }
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = if (isBusy) "搜索中" else "$resultCount 个结果",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+private fun LazyStaggeredGridScope.discoverItems(
     discover: DiscoverState,
-    trendingTags: List<TrendingTag>,
     onRefresh: () -> Unit,
     onLoadMore: (DiscoverFeed, Boolean) -> Unit,
     onOpenPreview: (Illust) -> Unit,
-    modifier: Modifier = Modifier,
+    clearSemantics: Boolean,
 ) {
-    val gridState = rememberLazyStaggeredGridState()
-    val decorativeFeedSemantics = rememberDecorativeFeedSemantics()
-    Box(
-        modifier = modifier.feedSemanticsBoundary(decorativeFeedSemantics),
+    item(span = StaggeredGridItemSpan.FullLine) {
+        SectionHeader(
+            title = "关注作品",
+            count = discover.publicWorks.items.size,
+            isLoading = discover.publicWorks.isLoading,
+            onRefresh = onRefresh,
+            actionLabel = "刷新",
+            showRefresh = true,
+        )
+    }
+    discoverFeedMessages(discover.publicWorks, "还没有加载到关注用户作品")
+    items(
+        discover.publicWorks.items,
+        key = { "discover-public-${it.id}" },
+        contentType = { "illust-card" },
+    ) { illust ->
+        IllustCard(
+            illust = illust,
+            clearSemantics = clearSemantics,
+            onClick = onOpenPreview,
+        )
+    }
+    item(span = StaggeredGridItemSpan.FullLine) {
+        DiscoverPagingFooter(
+            feed = discover.publicWorks,
+            onLoadMore = { onLoadMore(DiscoverFeed.Public, false) },
+        )
+    }
+    item(span = StaggeredGridItemSpan.FullLine) {
+        SectionHeader(
+            title = "悄悄关注",
+            count = discover.privateWorks.items.size,
+            isLoading = discover.privateWorks.isLoading,
+            onRefresh = onRefresh,
+            actionLabel = "刷新",
+            showRefresh = true,
+        )
+    }
+    discoverFeedMessages(discover.privateWorks, "还没有加载到悄悄关注作品")
+    items(
+        discover.privateWorks.items,
+        key = { "discover-private-${it.id}" },
+        contentType = { "illust-card" },
+    ) { illust ->
+        IllustCard(
+            illust = illust,
+            clearSemantics = clearSemantics,
+            onClick = onOpenPreview,
+        )
+    }
+    item(span = StaggeredGridItemSpan.FullLine) {
+        DiscoverPagingFooter(
+            feed = discover.privateWorks,
+            onLoadMore = { onLoadMore(DiscoverFeed.Private, false) },
+        )
+    }
+    if (
+        discover.publicWorks.items.isEmpty() &&
+        discover.privateWorks.items.isEmpty() &&
+        !discover.publicWorks.isLoading &&
+        !discover.privateWorks.isLoading
     ) {
-        LazyVerticalStaggeredGrid(
-            columns = StaggeredGridCells.Adaptive(154.dp),
-            state = gridState,
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(16.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalItemSpacing = 12.dp,
-        ) {
-            item(span = StaggeredGridItemSpan.FullLine) {
-                SectionHeader(
-                    title = "关注作品",
-                    count = discover.publicWorks.items.size,
-                    isLoading = discover.publicWorks.isLoading,
-                    onRefresh = onRefresh,
-                    actionLabel = "刷新",
-                    showRefresh = true,
-                )
-            }
-            discoverFeedMessages(discover.publicWorks, "还没有加载到关注用户作品")
-            items(
-                discover.publicWorks.items,
-                key = { "discover-public-${it.id}" },
-                contentType = { "illust-card" },
-            ) { illust ->
-                IllustCard(
-                    illust = illust,
-                    clearSemantics = decorativeFeedSemantics,
-                    onClick = onOpenPreview,
-                )
-            }
-            item(span = StaggeredGridItemSpan.FullLine) {
-                DiscoverPagingFooter(
-                    feed = discover.publicWorks,
-                    onLoadMore = { onLoadMore(DiscoverFeed.Public, false) },
-                )
-            }
-            item(span = StaggeredGridItemSpan.FullLine) {
-                SectionHeader(
-                    title = "悄悄关注",
-                    count = discover.privateWorks.items.size,
-                    isLoading = discover.privateWorks.isLoading,
-                    onRefresh = onRefresh,
-                    actionLabel = "刷新",
-                    showRefresh = true,
-                )
-            }
-            discoverFeedMessages(discover.privateWorks, "还没有加载到悄悄关注作品")
-            items(
-                discover.privateWorks.items,
-                key = { "discover-private-${it.id}" },
-                contentType = { "illust-card" },
-            ) { illust ->
-                IllustCard(
-                    illust = illust,
-                    clearSemantics = decorativeFeedSemantics,
-                    onClick = onOpenPreview,
-                )
-            }
-            item(span = StaggeredGridItemSpan.FullLine) {
-                DiscoverPagingFooter(
-                    feed = discover.privateWorks,
-                    onLoadMore = { onLoadMore(DiscoverFeed.Private, false) },
-                )
-            }
-            if (trendingTags.isEmpty() && discover.publicWorks.items.isEmpty() && discover.privateWorks.items.isEmpty()) {
-                item(span = StaggeredGridItemSpan.FullLine) {
-                    EmptySearch(Modifier.fillMaxWidth())
-                }
-            }
+        item(span = StaggeredGridItemSpan.FullLine) {
+            EmptySearch(Modifier.fillMaxWidth())
         }
     }
 }
@@ -5599,8 +5606,12 @@ private val DownloadStatus.label: String
 
 private fun DownloadItem.localSavedUris(): List<String> {
     return savedUris.orEmpty()
-        .mapNotNull { it?.takeIf { value -> value.isNotBlank() } }
+        .mapNotNull(::nonBlankStringOrNull)
         .ifEmpty { listOfNotNull(savedUri?.takeIf { it.isNotBlank() }) }
+}
+
+private fun nonBlankStringOrNull(value: String?): String? {
+    return value?.takeIf { it.isNotBlank() }
 }
 
 private fun String.downloadMimeType(): String {
