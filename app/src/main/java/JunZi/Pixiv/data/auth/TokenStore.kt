@@ -4,6 +4,9 @@ import android.content.Context
 import JunZi.Pixiv.DownloadItem
 import JunZi.Pixiv.DownloadStatus
 import JunZi.Pixiv.PreviewSwipeMode
+import JunZi.Pixiv.PuxivCustomPalette
+import JunZi.Pixiv.PuxivThemeMode
+import JunZi.Pixiv.PuxivThemePalette
 import JunZi.Pixiv.data.model.AuthSession
 import androidx.core.content.edit
 import com.google.gson.Gson
@@ -144,6 +147,45 @@ class TokenStore(context: Context) {
         preferences.edit { putString(KEY_UGOIRA_SAVE_FORMAT, format) }
     }
 
+    fun readThemeMode(): PuxivThemeMode {
+        val raw = preferences.getString(KEY_THEME_MODE, null)
+        return PuxivThemeMode.entries.firstOrNull { it.name == raw } ?: PuxivThemeMode.System
+    }
+
+    fun saveThemeMode(mode: PuxivThemeMode) {
+        preferences.edit { putString(KEY_THEME_MODE, mode.name) }
+    }
+
+    fun readUseMaterialYou(): Boolean {
+        return preferences.getBoolean(KEY_USE_MATERIAL_YOU, false)
+    }
+
+    fun saveUseMaterialYou(enabled: Boolean) {
+        preferences.edit { putBoolean(KEY_USE_MATERIAL_YOU, enabled) }
+    }
+
+    fun readThemePalette(): PuxivThemePalette {
+        val raw = preferences.getString(KEY_THEME_PALETTE, null)
+        return PuxivThemePalette.entries.firstOrNull { it.name == raw } ?: PuxivThemePalette.Puxiv
+    }
+
+    fun saveThemePalette(palette: PuxivThemePalette) {
+        preferences.edit { putString(KEY_THEME_PALETTE, palette.name) }
+    }
+
+    fun readCustomThemePalette(): PuxivCustomPalette {
+        val json = preferences.getString(KEY_CUSTOM_THEME_PALETTE, null)?.takeIf { it.isNotBlank() }
+            ?: return PuxivCustomPalette()
+        val parsed = runCatching {
+            gson.fromJson(json, PuxivCustomPalette::class.java)
+        }.getOrNull()
+        return parsed.normalizedCustomPalette()
+    }
+
+    fun saveCustomThemePalette(palette: PuxivCustomPalette) {
+        preferences.edit { putString(KEY_CUSTOM_THEME_PALETTE, gson.toJson(palette.normalizedCustomPalette())) }
+    }
+
     private fun String.trimBearer(): String {
         return trim().removePrefix("Bearer ").trim()
     }
@@ -182,7 +224,30 @@ class TokenStore(context: Context) {
         const val KEY_SAVE_UGOIRA_ZIP = "save_ugoira_zip"
         const val KEY_FILTERED_TAGS_INPUT = "filtered_tags_input"
         const val KEY_UGOIRA_SAVE_FORMAT = "ugoira_save_format"
+        const val KEY_THEME_MODE = "theme_mode"
+        const val KEY_USE_MATERIAL_YOU = "use_material_you"
+        const val KEY_THEME_PALETTE = "theme_palette"
+        const val KEY_CUSTOM_THEME_PALETTE = "custom_theme_palette"
         const val MAX_STORED_DOWNLOADS = 200
         val DOWNLOAD_LIST_TYPE = object : TypeToken<List<DownloadItem?>>() {}.type
     }
 }
+
+private fun PuxivCustomPalette?.normalizedCustomPalette(): PuxivCustomPalette {
+    val fallback = PuxivCustomPalette()
+    return PuxivCustomPalette(
+        primaryHex = this?.primaryHex.normalizedHexOr(fallback.primaryHex),
+        secondaryHex = this?.secondaryHex.normalizedHexOr(fallback.secondaryHex),
+        tertiaryHex = this?.tertiaryHex.normalizedHexOr(fallback.tertiaryHex),
+        backgroundHex = this?.backgroundHex.normalizedHexOr(fallback.backgroundHex),
+        surfaceHex = this?.surfaceHex.normalizedHexOr(fallback.surfaceHex),
+    )
+}
+
+private fun String?.normalizedHexOr(fallback: String): String {
+    val raw = this?.trim().orEmpty()
+    val withHash = if (raw.startsWith("#")) raw else "#$raw"
+    return if (HEX_COLOR_PATTERN.matches(withHash)) withHash.uppercase() else fallback
+}
+
+private val HEX_COLOR_PATTERN = Regex("""#[0-9A-Fa-f]{6}""")

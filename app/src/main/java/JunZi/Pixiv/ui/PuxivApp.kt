@@ -17,6 +17,9 @@ import JunZi.Pixiv.HistoryState
 import JunZi.Pixiv.MyState
 import JunZi.Pixiv.PixivViewModel
 import JunZi.Pixiv.PreviewSwipeMode
+import JunZi.Pixiv.PuxivCustomPalette
+import JunZi.Pixiv.PuxivThemeMode
+import JunZi.Pixiv.PuxivThemePalette
 import JunZi.Pixiv.UgoiraSaveFormat
 import JunZi.Pixiv.PuxivUiState
 import JunZi.Pixiv.UserPreviewFeedState
@@ -25,6 +28,8 @@ import JunZi.Pixiv.data.model.BookmarkRestrict
 import JunZi.Pixiv.data.model.Illust
 import JunZi.Pixiv.data.model.IllustImagePage
 import JunZi.Pixiv.data.model.UserPreview
+import JunZi.Pixiv.ui.theme.PuxivTheme
+import JunZi.Pixiv.ui.theme.puxivColorScheme
 import JunZi.Pixiv.data.model.RankingMode
 import JunZi.Pixiv.data.model.SearchSort
 import JunZi.Pixiv.data.model.SearchTarget
@@ -57,6 +62,7 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.LocalOverscrollFactory
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -145,6 +151,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
@@ -212,6 +219,7 @@ import com.bumptech.glide.RequestManager
 import com.bumptech.glide.load.DataSource
 import com.bumptech.glide.load.engine.GlideException
 import com.bumptech.glide.load.model.GlideUrl
+import com.bumptech.glide.load.resource.gif.GifDrawable
 import com.bumptech.glide.request.RequestOptions
 import com.bumptech.glide.request.RequestListener
 import com.bumptech.glide.request.target.CustomTarget
@@ -245,6 +253,7 @@ private const val PuxivTrendImageSize = 360
 private const val PuxivFullScreenMaxScale = 5f
 private const val PuxivZoomReleaseEpsilon = 0.01f
 private const val PuxivZoomedPageTurnThresholdDp = 72f
+private val PuxivFullScreenTopBarHeight = 64.dp
 
 private enum class MyTab(val label: String) {
     Works("作品"),
@@ -259,124 +268,140 @@ private enum class MyTab(val label: String) {
 fun PuxivApp(viewModel: PixivViewModel) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+    val transientStateHolder = rememberSaveableStateHolder()
     val mainShellScreen = if (state.screen == AppScreen.Preview) state.previewReturnScreen else state.screen
     val showMainShell = mainShellScreen in setOf(AppScreen.Home, AppScreen.Search, AppScreen.Me, AppScreen.Settings)
     val showTransientScreen = state.screen in setOf(AppScreen.Login, AppScreen.WebLogin, AppScreen.Preview, AppScreen.Author)
 
-    LaunchedEffect(state.message) {
-        val message = state.message
-        if (message != null) {
-            snackbarHostState.showSnackbar(message)
-            viewModel.clearMessage()
-        }
-    }
-
-    BackHandler(enabled = state.screen != AppScreen.Home) {
-        if (state.isFullScreenPreview) {
-            viewModel.closeFullScreenPreview()
-        } else {
-            viewModel.goBack()
-        }
-    }
-
-    Surface(
-        modifier = Modifier.fillMaxSize(),
-        color = MaterialTheme.colorScheme.background,
+    PuxivTheme(
+        themeMode = state.themeMode,
+        useMaterialYou = state.useMaterialYou,
+        palette = state.themePalette,
+        customPalette = state.customPalette,
     ) {
-        Box(Modifier.fillMaxSize()) {
-            if (showMainShell) {
-                MainShell(
-                    screen = mainShellScreen,
-                    home = state.home,
-                    keyword = state.keyword,
-                    isBusy = state.isBusy,
-                    rankingMode = state.rankingMode,
-                    searchTarget = state.searchTarget,
-                    searchSort = state.searchSort,
-                    isTrendingLoading = state.isTrendingLoading,
-                    trendingTags = state.trendingTags,
-                    discover = state.discover,
-                    items = state.items,
-                    isSearchActive = state.isSearchActive,
-                    isLoadingMore = state.isLoadingMore,
-                    nextUrl = state.nextUrl,
-                    session = state.session,
-                    mine = state.mine,
-                    history = state.history,
-                    downloads = state.downloads.items,
-                    diagnostics = state.home.diagnostics,
-                    useHostIpRouting = state.useHostIpRouting,
-                    useRemoteImageProxy = state.useRemoteImageProxy,
-                    imageProxyInput = state.imageProxyInput,
-                    saveUgoiraZip = state.saveUgoiraZip,
-                    filteredTagsInput = state.filteredTagsInput,
-                    previewSwipeMode = state.previewSwipeMode,
-                    ugoiraSaveFormat = state.ugoiraSaveFormat,
-                    viewModel = viewModel,
-                )
+        LaunchedEffect(state.message) {
+            val message = state.message
+            if (message != null) {
+                snackbarHostState.showSnackbar(message)
+                viewModel.clearMessage()
             }
-            if (showTransientScreen) {
-                AnimatedContent(
-                    targetState = state.screen,
-                    label = "transient-screen",
-                ) { screen ->
-                    when (screen) {
-                        AppScreen.Login -> LoginScreen(
-                            state = state,
-                            onAccessTokenChange = viewModel::updateAccessToken,
-                            onRefreshTokenChange = viewModel::updateRefreshToken,
-                            onAuthCodeChange = viewModel::updateAuthCode,
-                            onSaveToken = viewModel::saveManualToken,
-                            onStartWebLogin = viewModel::startWebLogin,
-                            onExchangeCode = { viewModel.exchangeAuthCode() },
-                        )
+        }
 
-                        AppScreen.WebLogin -> WebLoginScreen(
-                            loginUrl = state.loginUrl,
-                            onBack = viewModel::goBack,
-                            onCode = { code, useNetworkProxy -> viewModel.exchangeAuthCode(code, useNetworkProxy) },
-                        )
+        BackHandler(enabled = state.screen != AppScreen.Home) {
+            if (state.isFullScreenPreview) {
+                viewModel.closeFullScreenPreview()
+            } else {
+                viewModel.goBack()
+            }
+        }
 
-                        AppScreen.Preview -> PreviewScreen(
-                            state = state,
-                            onBack = viewModel::goBack,
-                            onSelectImage = viewModel::selectImage,
-                            onToggleBookmark = viewModel::toggleSelectedBookmark,
-                            onLoadRelated = { viewModel.loadRelated(refresh = false) },
-                            onOpenPreview = viewModel::openPreview,
-                            onOpenFullScreen = viewModel::openFullScreenPreview,
-                            onCloseFullScreen = viewModel::closeFullScreenPreview,
-                            onTagClick = viewModel::searchTag,
-                            onDownload = viewModel::downloadSelectedIllust,
-                            onCommentInputChange = viewModel::updateCommentInput,
-                            onSendComment = viewModel::sendComment,
-                            onOpenAuthor = viewModel::openAuthor,
-                        )
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.background,
+        ) {
+            Box(Modifier.fillMaxSize()) {
+                if (showMainShell) {
+                    MainShell(
+                        screen = mainShellScreen,
+                        home = state.home,
+                        keyword = state.keyword,
+                        isBusy = state.isBusy,
+                        rankingMode = state.rankingMode,
+                        searchTarget = state.searchTarget,
+                        searchSort = state.searchSort,
+                        isTrendingLoading = state.isTrendingLoading,
+                        trendingTags = state.trendingTags,
+                        discover = state.discover,
+                        items = state.items,
+                        isSearchActive = state.isSearchActive,
+                        isLoadingMore = state.isLoadingMore,
+                        nextUrl = state.nextUrl,
+                        session = state.session,
+                        mine = state.mine,
+                        history = state.history,
+                        downloads = state.downloads.items,
+                        diagnostics = state.home.diagnostics,
+                        useHostIpRouting = state.useHostIpRouting,
+                        useRemoteImageProxy = state.useRemoteImageProxy,
+                        imageProxyInput = state.imageProxyInput,
+                        saveUgoiraZip = state.saveUgoiraZip,
+                        filteredTagsInput = state.filteredTagsInput,
+                        previewSwipeMode = state.previewSwipeMode,
+                        ugoiraSaveFormat = state.ugoiraSaveFormat,
+                        themeMode = state.themeMode,
+                        useMaterialYou = state.useMaterialYou,
+                        themePalette = state.themePalette,
+                        customPalette = state.customPalette,
+                        viewModel = viewModel,
+                    )
+                }
+                if (showTransientScreen) {
+                    AnimatedContent(
+                        targetState = state.screen,
+                        label = "transient-screen",
+                    ) { screen ->
+                        when (screen) {
+                            AppScreen.Login -> LoginScreen(
+                                state = state,
+                                onAccessTokenChange = viewModel::updateAccessToken,
+                                onRefreshTokenChange = viewModel::updateRefreshToken,
+                                onAuthCodeChange = viewModel::updateAuthCode,
+                                onSaveToken = viewModel::saveManualToken,
+                                onStartWebLogin = viewModel::startWebLogin,
+                                onExchangeCode = { viewModel.exchangeAuthCode() },
+                            )
 
-                        AppScreen.Author -> AuthorScreen(
-                            author = state.author,
-                            onBack = viewModel::goBack,
-                            onRefreshProfile = viewModel::loadAuthorProfile,
-                            onRefreshWorks = { viewModel.loadAuthorWorks(refresh = true) },
-                            onLoadMore = { viewModel.loadAuthorWorks(refresh = false) },
-                            onSelectTab = viewModel::selectAuthorTab,
-                            onFollowPublic = { viewModel.followAuthor(BookmarkRestrict.Public) },
-                            onFollowPrivate = { viewModel.followAuthor(BookmarkRestrict.Private) },
-                            onUnfollow = viewModel::unfollowAuthor,
-                            onOpenPreview = viewModel::openPreview,
-                        )
+                            AppScreen.WebLogin -> WebLoginScreen(
+                                loginUrl = state.loginUrl,
+                                onBack = viewModel::goBack,
+                                onCode = { code, useNetworkProxy -> viewModel.exchangeAuthCode(code, useNetworkProxy) },
+                            )
 
-                        else -> Unit
+                            AppScreen.Preview -> PreviewScreen(
+                                state = state,
+                                onBack = viewModel::goBack,
+                                onSelectImage = viewModel::selectImage,
+                                onToggleBookmark = viewModel::toggleSelectedBookmark,
+                                onLoadRelated = { viewModel.loadRelated(refresh = false) },
+                                onOpenPreview = viewModel::openPreview,
+                                onOpenFullScreen = viewModel::openFullScreenPreview,
+                                onCloseFullScreen = viewModel::closeFullScreenPreview,
+                                onTagClick = viewModel::searchTag,
+                                onDownload = viewModel::downloadSelectedIllust,
+                                onCommentInputChange = viewModel::updateCommentInput,
+                                onSendComment = viewModel::sendComment,
+                                onOpenAuthor = viewModel::openAuthor,
+                            )
+
+                            AppScreen.Author -> transientStateHolder.SaveableStateProvider(
+                                key = "author-${state.author.userId ?: 0L}",
+                            ) {
+                                AuthorScreen(
+                                    author = state.author,
+                                    onBack = viewModel::goBack,
+                                    onRefreshProfile = viewModel::loadAuthorProfile,
+                                    onRefreshWorks = { viewModel.loadAuthorWorks(refresh = true) },
+                                    onLoadMore = { viewModel.loadAuthorWorks(refresh = false) },
+                                    onSelectTab = viewModel::selectAuthorTab,
+                                    onFollowPublic = { viewModel.followAuthor(BookmarkRestrict.Public) },
+                                    onFollowPrivate = { viewModel.followAuthor(BookmarkRestrict.Private) },
+                                    onUnfollow = viewModel::unfollowAuthor,
+                                    onOpenPreview = viewModel::openPreview,
+                                )
+                            }
+
+                            else -> Unit
+                        }
                     }
                 }
-            }
 
-            SnackbarHost(
-                hostState = snackbarHostState,
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .navigationBarsPadding(),
-            )
+                SnackbarHost(
+                    hostState = snackbarHostState,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .navigationBarsPadding(),
+                )
+            }
         }
     }
 }
@@ -409,6 +434,10 @@ private fun MainShell(
     filteredTagsInput: String,
     previewSwipeMode: PreviewSwipeMode,
     ugoiraSaveFormat: UgoiraSaveFormat,
+    themeMode: PuxivThemeMode,
+    useMaterialYou: Boolean,
+    themePalette: PuxivThemePalette,
+    customPalette: PuxivCustomPalette,
     viewModel: PixivViewModel,
 ) {
     val mainScreens = remember { listOf(AppScreen.Home, AppScreen.Search, AppScreen.Me) }
@@ -524,7 +553,6 @@ private fun MainShell(
                         onLoadMore = viewModel::loadMore,
                         onSearchSortChange = viewModel::updateSearchSort,
                         onSearchTargetChange = viewModel::updateSearchTarget,
-                        onPopularPreview = viewModel::loadPopularPreview,
                         onTrendingTagClick = viewModel::searchTrendingTag,
                         onReturnToDiscover = viewModel::returnToDiscover,
                         onOpenPreview = viewModel::openPreview,
@@ -575,11 +603,19 @@ private fun MainShell(
                     filteredTagsInput = filteredTagsInput,
                     previewSwipeMode = previewSwipeMode,
                     ugoiraSaveFormat = ugoiraSaveFormat,
+                    themeMode = themeMode,
+                    useMaterialYou = useMaterialYou,
+                    themePalette = themePalette,
+                    customPalette = customPalette,
                     contentPadding = padding,
                     onRefreshDns = { viewModel.refreshDns(showMessage = true) },
                     onDiagnostics = viewModel::runDiagnostics,
                     onHostIpRoutingEnabledChange = viewModel::updateHostIpRoutingEnabled,
                     onPreviewSwipeModeChange = viewModel::updatePreviewSwipeMode,
+                    onThemeModeChange = viewModel::updateThemeMode,
+                    onMaterialYouEnabledChange = viewModel::updateMaterialYouEnabled,
+                    onThemePaletteChange = viewModel::updateThemePalette,
+                    onCustomThemePaletteChange = viewModel::updateCustomThemePalette,
                     onImageProxyEnabledChange = viewModel::updateImageProxyEnabled,
                     onImageProxyInputChange = viewModel::updateImageProxyInput,
                     onSaveImageProxy = viewModel::saveImageProxyOrigin,
@@ -2689,11 +2725,19 @@ private fun SettingsScreen(
     filteredTagsInput: String,
     previewSwipeMode: PreviewSwipeMode,
     ugoiraSaveFormat: UgoiraSaveFormat,
+    themeMode: PuxivThemeMode,
+    useMaterialYou: Boolean,
+    themePalette: PuxivThemePalette,
+    customPalette: PuxivCustomPalette,
     contentPadding: PaddingValues,
     onRefreshDns: () -> Unit,
     onDiagnostics: () -> Unit,
     onHostIpRoutingEnabledChange: (Boolean) -> Unit,
     onPreviewSwipeModeChange: (PreviewSwipeMode) -> Unit,
+    onThemeModeChange: (PuxivThemeMode) -> Unit,
+    onMaterialYouEnabledChange: (Boolean) -> Unit,
+    onThemePaletteChange: (PuxivThemePalette) -> Unit,
+    onCustomThemePaletteChange: (PuxivCustomPalette) -> Unit,
     onImageProxyEnabledChange: (Boolean) -> Unit,
     onImageProxyInputChange: (String) -> Unit,
     onSaveImageProxy: () -> Unit,
@@ -2711,7 +2755,7 @@ private fun SettingsScreen(
                     Column {
                         Text("设置")
                         Text(
-                            text = "网络路由、图片代理与预览方式",
+                            text = "外观、网络路由、图片代理与预览方式",
                             style = MaterialTheme.typography.labelLarge,
                             color = MaterialTheme.colorScheme.secondary,
                         )
@@ -2729,6 +2773,16 @@ private fun SettingsScreen(
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            ThemeSettingsSection(
+                themeMode = themeMode,
+                useMaterialYou = useMaterialYou,
+                themePalette = themePalette,
+                customPalette = customPalette,
+                onThemeModeChange = onThemeModeChange,
+                onMaterialYouEnabledChange = onMaterialYouEnabledChange,
+                onThemePaletteChange = onThemePaletteChange,
+                onCustomThemePaletteChange = onCustomThemePaletteChange,
+            )
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(8.dp),
@@ -3012,6 +3066,397 @@ private fun SettingsScreen(
 }
 
 @Composable
+private fun ThemeSettingsSection(
+    themeMode: PuxivThemeMode,
+    useMaterialYou: Boolean,
+    themePalette: PuxivThemePalette,
+    customPalette: PuxivCustomPalette,
+    onThemeModeChange: (PuxivThemeMode) -> Unit,
+    onMaterialYouEnabledChange: (Boolean) -> Unit,
+    onThemePaletteChange: (PuxivThemePalette) -> Unit,
+    onCustomThemePaletteChange: (PuxivCustomPalette) -> Unit,
+) {
+    val materialYouAvailable = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+    val materialYouActive = useMaterialYou && materialYouAvailable
+    var showCustomPaletteDialog by remember { mutableStateOf(false) }
+    val previewDark = when (themeMode) {
+        PuxivThemeMode.System -> isSystemInDarkTheme()
+        PuxivThemeMode.Light -> false
+        PuxivThemeMode.Dark -> true
+    }
+    val paletteScheme = themePalette.puxivColorScheme(previewDark, customPalette)
+
+    if (showCustomPaletteDialog) {
+        CustomPaletteDialog(
+            customPalette = customPalette,
+            previewDark = previewDark,
+            onDismiss = { showCustomPaletteDialog = false },
+            onSave = { palette ->
+                onCustomThemePaletteChange(palette)
+                showCustomPaletteDialog = false
+            },
+        )
+    }
+
+    Text(
+        text = "外观",
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.Bold,
+    )
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Default.Tune, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = "Material You 动态取色",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = if (materialYouAvailable) "跟随系统壁纸生成应用色彩。" else "Android 12 及以上可用。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = materialYouActive,
+                    onCheckedChange = { if (materialYouAvailable) onMaterialYouEnabledChange(it) },
+                    enabled = materialYouAvailable,
+                )
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "亮色 / 暗色",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    PuxivThemeMode.entries.forEach { mode ->
+                        FilterChip(
+                            selected = themeMode == mode,
+                            onClick = { onThemeModeChange(mode) },
+                            label = { Text(mode.label) },
+                        )
+                    }
+                }
+            }
+
+            if (!materialYouActive) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "调色板",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    PuxivThemePalette.entries.chunked(2).forEach { rowPalettes ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            rowPalettes.forEach { palette ->
+                                ThemePaletteChip(
+                                    palette = palette,
+                                    selected = themePalette == palette,
+                                    previewDark = previewDark,
+                                    customPalette = customPalette,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(64.dp),
+                                    onClick = {
+                                        if (palette == PuxivThemePalette.Custom) {
+                                            showCustomPaletteDialog = true
+                                        } else {
+                                            onThemePaletteChange(palette)
+                                        }
+                                    },
+                                )
+                            }
+                            if (rowPalettes.size == 1) {
+                                Spacer(Modifier.weight(1f))
+                            }
+                        }
+                    }
+                    PaletteDetailPreview(colorScheme = paletteScheme)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ThemePaletteChip(
+    palette: PuxivThemePalette,
+    selected: Boolean,
+    previewDark: Boolean,
+    customPalette: PuxivCustomPalette,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val colorScheme = palette.puxivColorScheme(previewDark, customPalette)
+    Surface(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(8.dp),
+        color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+        border = BorderStroke(
+            width = 1.dp,
+            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+        ),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            PaletteMiniSwatches(colorScheme = colorScheme)
+            Text(
+                text = palette.label,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PaletteMiniSwatches(colorScheme: ColorScheme) {
+    Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+        listOf(
+            colorScheme.primary,
+            colorScheme.secondary,
+            colorScheme.tertiary,
+        ).forEach { color ->
+            Box(
+                modifier = Modifier
+                    .size(12.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(color),
+            )
+        }
+    }
+}
+
+@Composable
+private fun CustomPaletteDialog(
+    customPalette: PuxivCustomPalette,
+    previewDark: Boolean,
+    onDismiss: () -> Unit,
+    onSave: (PuxivCustomPalette) -> Unit,
+) {
+    var primaryHex by remember(customPalette) { mutableStateOf(customPalette.primaryHex) }
+    var secondaryHex by remember(customPalette) { mutableStateOf(customPalette.secondaryHex) }
+    var tertiaryHex by remember(customPalette) { mutableStateOf(customPalette.tertiaryHex) }
+    var backgroundHex by remember(customPalette) { mutableStateOf(customPalette.backgroundHex) }
+    var surfaceHex by remember(customPalette) { mutableStateOf(customPalette.surfaceHex) }
+    val candidate = PuxivCustomPalette(
+        primaryHex = primaryHex.normalizedHexOrEmpty(),
+        secondaryHex = secondaryHex.normalizedHexOrEmpty(),
+        tertiaryHex = tertiaryHex.normalizedHexOrEmpty(),
+        backgroundHex = backgroundHex.normalizedHexOrEmpty(),
+        surfaceHex = surfaceHex.normalizedHexOrEmpty(),
+    )
+    val isValid = listOf(
+        primaryHex,
+        secondaryHex,
+        tertiaryHex,
+        backgroundHex,
+        surfaceHex,
+    ).all { it.normalizedHexOrNull() != null }
+    val previewScheme = PuxivThemePalette.Custom.puxivColorScheme(previewDark, candidate)
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("自定义调色板") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 520.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                CustomPaletteField("主色", primaryHex, { primaryHex = it })
+                CustomPaletteField("辅色", secondaryHex, { secondaryHex = it })
+                CustomPaletteField("强调色", tertiaryHex, { tertiaryHex = it })
+                CustomPaletteField("背景", backgroundHex, { backgroundHex = it })
+                CustomPaletteField("表面", surfaceHex, { surfaceHex = it })
+                if (!isValid) {
+                    Text(
+                        text = "请输入 #RRGGBB 格式的颜色。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                PaletteDetailPreview(colorScheme = previewScheme)
+            }
+        },
+        confirmButton = {
+            Button(
+                enabled = isValid,
+                onClick = { onSave(candidate) },
+            ) {
+                Text("保存")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        },
+    )
+}
+
+@Composable
+private fun CustomPaletteField(
+    label: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+) {
+    val color = value.toColorOrNull()
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(32.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .background(color ?: MaterialTheme.colorScheme.errorContainer),
+        )
+        OutlinedTextField(
+            value = value,
+            onValueChange = { onValueChange(it.take(7)) },
+            modifier = Modifier.weight(1f),
+            label = { Text(label) },
+            singleLine = true,
+            isError = value.normalizedHexOrNull() == null,
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Ascii,
+                imeAction = ImeAction.Next,
+            ),
+        )
+    }
+}
+
+@Composable
+private fun PaletteDetailPreview(
+    colorScheme: ColorScheme,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            PaletteDetailToken("主色", colorScheme.primary)
+            PaletteDetailToken("辅色", colorScheme.secondary)
+            PaletteDetailToken("强调", colorScheme.tertiary)
+            PaletteDetailToken("容器", colorScheme.primaryContainer)
+            PaletteDetailToken("背景", colorScheme.background)
+            PaletteDetailToken("表面", colorScheme.surfaceVariant)
+        }
+    }
+}
+
+@Composable
+private fun PaletteDetailToken(
+    label: String,
+    color: Color,
+) {
+    Row(
+        modifier = Modifier.widthIn(min = 116.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(24.dp)
+                .clip(RoundedCornerShape(5.dp))
+                .background(color),
+        )
+        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = color.toHexString(),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+private val PuxivThemeMode.label: String
+    get() = when (this) {
+        PuxivThemeMode.System -> "跟随系统"
+        PuxivThemeMode.Light -> "亮色"
+        PuxivThemeMode.Dark -> "暗色"
+    }
+
+private val PuxivThemePalette.label: String
+    get() = when (this) {
+        PuxivThemePalette.Puxiv -> "Puxiv 蓝"
+        PuxivThemePalette.Sakura -> "樱花"
+        PuxivThemePalette.Mint -> "薄荷"
+        PuxivThemePalette.Violet -> "紫罗兰"
+        PuxivThemePalette.Amber -> "琥珀"
+        PuxivThemePalette.Slate -> "青石"
+        PuxivThemePalette.Custom -> "自定义"
+    }
+
+private fun Color.toHexString(): String {
+    val rgb = toArgb() and 0x00FFFFFF
+    return "#${rgb.toString(16).padStart(6, '0').uppercase()}"
+}
+
+private fun String.normalizedHexOrEmpty(): String {
+    return normalizedHexOrNull().orEmpty()
+}
+
+private fun String.normalizedHexOrNull(): String? {
+    val raw = trim()
+    val withHash = if (raw.startsWith("#")) raw else "#$raw"
+    return if (UI_HEX_COLOR_PATTERN.matches(withHash)) withHash.uppercase() else null
+}
+
+private fun String.toColorOrNull(): Color? {
+    val hex = normalizedHexOrNull()?.removePrefix("#") ?: return null
+    return Color(0xFF000000 or hex.toLong(16))
+}
+
+private val UI_HEX_COLOR_PATTERN = Regex("""#[0-9A-Fa-f]{6}""")
+
+@Composable
 private fun OpenSourceLicenseSection() {
     val context = LocalContext.current
     Text(
@@ -3180,7 +3625,6 @@ private fun SearchScreen(
     onLoadMore: () -> Unit,
     onSearchSortChange: (SearchSort) -> Unit,
     onSearchTargetChange: (SearchTarget) -> Unit,
-    onPopularPreview: () -> Unit,
     onTrendingTagClick: (TrendingTag) -> Unit,
     onReturnToDiscover: () -> Unit,
     onOpenPreview: (Illust) -> Unit,
@@ -3257,7 +3701,6 @@ private fun SearchScreen(
                             onSearch = onSearch,
                             onSearchSortChange = onSearchSortChange,
                             onSearchTargetChange = onSearchTargetChange,
-                            onPopularPreview = onPopularPreview,
                             onTrendingTagClick = onTrendingTagClick,
                         )
                     }
@@ -3297,7 +3740,6 @@ private fun SearchScreen(
                             onSearch = onSearch,
                             onSearchSortChange = onSearchSortChange,
                             onSearchTargetChange = onSearchTargetChange,
-                            onPopularPreview = onPopularPreview,
                             onTrendingTagClick = onTrendingTagClick,
                         )
                     }
@@ -3351,7 +3793,6 @@ private fun SearchControlPanel(
     onSearch: () -> Unit,
     onSearchSortChange: (SearchSort) -> Unit,
     onSearchTargetChange: (SearchTarget) -> Unit,
-    onPopularPreview: () -> Unit,
     onTrendingTagClick: (TrendingTag) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -3419,20 +3860,12 @@ private fun SearchControlPanel(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                SearchSort.values().forEach { sort ->
+                SearchSort.entries.forEach { sort ->
                     FilterChip(
                         selected = searchSort == sort,
                         onClick = { onSearchSortChange(sort) },
                         label = { Text(sort.label) },
                     )
-                }
-                FilledTonalButton(
-                    onClick = onPopularPreview,
-                    enabled = keyword.isNotBlank() && !isBusy,
-                    modifier = Modifier.height(32.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp),
-                ) {
-                    Text("热门预览")
                 }
             }
 
@@ -3697,6 +4130,13 @@ private fun PreviewScreen(
 ) {
     val illust = state.selectedIllust
     val previewStateHolder = rememberSaveableStateHolder()
+    var measuredRatios by remember(illust?.id) { mutableStateOf<Map<Int, Float>>(emptyMap()) }
+    fun updateMeasuredRatio(index: Int, width: Int, height: Int) {
+        val ratio = (width.toFloat() / height.coerceAtLeast(1)).coerceIn(0.18f, 4.5f)
+        if (measuredRatios[index] != ratio) {
+            measuredRatios = measuredRatios + (index to ratio)
+        }
+    }
     val fullScreenIndex = illust?.let {
         val size = it.imageUrls.ifEmpty { listOfNotNull(it.previewUrl) }.size
         state.selectedImageIndex.coerceIn(0, (size - 1).coerceAtLeast(0))
@@ -3742,13 +4182,6 @@ private fun PreviewScreen(
                 }
             }
             val safeIndex = state.selectedImageIndex.coerceIn(0, (pages.size - 1).coerceAtLeast(0))
-            var measuredRatios by remember(illust.id) { mutableStateOf<Map<Int, Float>>(emptyMap()) }
-            fun updateMeasuredRatio(index: Int, width: Int, height: Int) {
-                val ratio = (width.toFloat() / height.coerceAtLeast(1)).coerceIn(0.18f, 4.5f)
-                if (measuredRatios[index] != ratio) {
-                    measuredRatios = measuredRatios + (index to ratio)
-                }
-            }
 
             Box(
                 modifier = Modifier
@@ -3761,6 +4194,7 @@ private fun PreviewScreen(
                         pages = pages,
                         selectedIndex = safeIndex,
                         measuredRatios = measuredRatios,
+                        animateImages = !state.isFullScreenPreview,
                         onSelectImage = onSelectImage,
                         onOpenFullScreen = onOpenFullScreen,
                         onImageMeasured = { index, width, height ->
@@ -3818,6 +4252,7 @@ private fun PreviewScreen(
                                     HorizontalImagePreview(
                                         illust = illust,
                                         imageIndex = state.selectedImageIndex,
+                                        animateImages = !state.isFullScreenPreview,
                                         onSelectImage = onSelectImage,
                                         onOpenFullScreen = onOpenFullScreen,
                                         onImageMeasured = { index, width, height ->
@@ -3873,6 +4308,7 @@ private fun PreviewScreen(
             imageIndex = fullScreenIndex,
             swipeMode = state.previewSwipeMode,
             frames = state.ugoiraFrames,
+            measuredRatios = measuredRatios,
             onSelectImage = onSelectImage,
             onClose = onCloseFullScreen,
         )
@@ -3897,6 +4333,7 @@ private fun AuthorScreen(
     val feed = when (author.selectedTab) {
         AuthorWorkTab.Illust -> author.illusts
         AuthorWorkTab.Manga -> author.manga
+        AuthorWorkTab.Bookmarks -> author.bookmarks
     }
     Scaffold(
         topBar = {
@@ -3949,6 +4386,7 @@ private fun AuthorScreen(
                     selected = author.selectedTab,
                     illustCount = author.totalIllusts,
                     mangaCount = author.totalManga,
+                    bookmarkCount = author.totalBookmarks,
                     onSelect = onSelectTab,
                 )
             }
@@ -4058,7 +4496,7 @@ private fun AuthorHeader(
                         )
                     }
                     Text(
-                        text = "粉丝 ${author.followerCount} · 好友 ${author.myPixivCount}",
+                        text = "关注 ${author.followingCount} · 好友 ${author.myPixivCount}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -4107,6 +4545,7 @@ private fun AuthorTabRow(
     selected: AuthorWorkTab,
     illustCount: Int,
     mangaCount: Int,
+    bookmarkCount: Int,
     onSelect: (AuthorWorkTab) -> Unit,
 ) {
     Surface(
@@ -4116,7 +4555,9 @@ private fun AuthorTabRow(
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Row(
-            modifier = Modifier.padding(10.dp),
+            modifier = Modifier
+                .horizontalScroll(rememberScrollState())
+                .padding(10.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             FilterChip(
@@ -4128,6 +4569,11 @@ private fun AuthorTabRow(
                 selected = selected == AuthorWorkTab.Manga,
                 onClick = { onSelect(AuthorWorkTab.Manga) },
                 label = { Text("漫画 $mangaCount") },
+            )
+            FilterChip(
+                selected = selected == AuthorWorkTab.Bookmarks,
+                onClick = { onSelect(AuthorWorkTab.Bookmarks) },
+                label = { Text("收藏 $bookmarkCount") },
             )
         }
     }
@@ -4319,6 +4765,7 @@ private fun Illust.previewUrls(): List<String> = imageUrls.ifEmpty { listOfNotNu
 private fun HorizontalImagePreview(
     illust: Illust,
     imageIndex: Int,
+    animateImages: Boolean,
     onSelectImage: (Int) -> Unit,
     onOpenFullScreen: (Int) -> Unit,
     onImageMeasured: (Int, Int, Int) -> Unit,
@@ -4358,6 +4805,7 @@ private fun HorizontalImagePreview(
                 showLoadingBar = true,
                 requestSize = PuxivPreviewImageSize,
                 onDrawableSize = { width, height -> onImageMeasured(index, width, height) },
+                animate = animateImages,
             )
         }
         if (urls.size > 1) {
@@ -4389,6 +4837,7 @@ private fun VerticalComicPreview(
     pages: List<IllustImagePage>,
     selectedIndex: Int,
     measuredRatios: Map<Int, Float>,
+    animateImages: Boolean,
     onSelectImage: (Int) -> Unit,
     onOpenFullScreen: (Int) -> Unit,
     onImageMeasured: (Int, Int, Int) -> Unit,
@@ -4454,6 +4903,7 @@ private fun VerticalComicPreview(
                 showLoadingBar = true,
                 requestSize = PuxivPreviewImageSize,
                 onDrawableSize = { width, height -> onImageMeasured(index, width, height) },
+                animate = animateImages,
             )
         }
         footer()
@@ -4494,6 +4944,7 @@ private fun FullScreenPreview(
     imageIndex: Int,
     swipeMode: PreviewSwipeMode,
     frames: List<UgoiraFrameImage>,
+    measuredRatios: Map<Int, Float>,
     onSelectImage: (Int) -> Unit,
     onClose: () -> Unit,
 ) {
@@ -4535,6 +4986,7 @@ private fun FullScreenPreview(
                     FullScreenVerticalPreview(
                         illust = illust,
                         selectedIndex = safeIndex,
+                        measuredRatios = measuredRatios,
                         onSelectImage = onSelectImage,
                         onClose = onClose,
                         modifier = Modifier.fillMaxSize(),
@@ -4598,12 +5050,14 @@ private fun FullScreenPreview(
 private fun FullScreenVerticalPreview(
     illust: Illust,
     selectedIndex: Int,
+    measuredRatios: Map<Int, Float>,
     onSelectImage: (Int) -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val urls = illust.previewUrls()
     val scrollState = rememberScrollState()
+    val firstPageTopPaddingPx = with(LocalDensity.current) { PuxivFullScreenTopBarHeight.toPx().roundToInt() }
     var scale by remember(illust.id) { mutableStateOf(1f) }
     var offsetX by remember(illust.id) { mutableStateOf(0f) }
     var offsetY by remember(illust.id) { mutableStateOf(0f) }
@@ -4616,8 +5070,12 @@ private fun FullScreenVerticalPreview(
     }
 
     fun pageHeightPx(index: Int): Int {
-        val ratio = illust.imagePages.getOrNull(index)?.aspectRatio ?: illust.aspectRatio
+        val ratio = measuredRatios[index] ?: illust.imagePages.getOrNull(index)?.aspectRatio ?: illust.aspectRatio
         return (containerWidthPx / ratio.coerceIn(0.18f, 4.5f)).roundToInt().coerceAtLeast(1)
+    }
+
+    fun pageTopPx(index: Int): Int {
+        return firstPageTopPaddingPx + urls.indices.take(index).sumOf(::pageHeightPx)
     }
 
     fun maxOffsetX(forScale: Float = scale): Float = ((forScale - 1f) * containerWidthPx / 2f).coerceAtLeast(0f)
@@ -4638,22 +5096,30 @@ private fun FullScreenVerticalPreview(
             selectedIndex in urls.indices &&
             !didPlaceInitialPage
         ) {
-            val targetOffset = urls.indices.take(selectedIndex).sumOf(::pageHeightPx)
+            val targetOffset = pageTopPx(selectedIndex).let { pageTop ->
+                if (selectedIndex == 0) 0 else pageTop
+            }
             scrollState.scrollTo(targetOffset)
             didPlaceInitialPage = true
         }
     }
-    LaunchedEffect(urls.size, containerWidthPx) {
+    LaunchedEffect(urls.size, containerWidthPx, containerHeightPx, firstPageTopPaddingPx, measuredRatios) {
         snapshotFlow { scrollState.value }
             .distinctUntilChanged()
             .collect { offset ->
                 if (urls.isNotEmpty()) {
-                    var accumulated = 0
-                    val index = urls.indices.firstOrNull { page ->
-                        val next = accumulated + pageHeightPx(page)
-                        val isCurrent = offset < next
-                        accumulated = next
-                        isCurrent
+                    val viewportTop = offset
+                    val viewportBottom = offset + containerHeightPx
+                    val viewportCenter = viewportTop + containerHeightPx / 2
+                    val index = urls.indices.maxByOrNull { page ->
+                        val pageTop = pageTopPx(page)
+                        val pageBottom = pageTop + pageHeightPx(page)
+                        val visible = minOf(pageBottom, viewportBottom) - maxOf(pageTop, viewportTop)
+                        if (visible > 0) {
+                            visible
+                        } else {
+                            -abs(((pageTop + pageBottom) / 2) - viewportCenter)
+                        }
                     } ?: urls.lastIndex
                     lastSelectedFromScroll = index
                     onSelectImage(index)
@@ -4733,11 +5199,12 @@ private fun FullScreenVerticalPreview(
                         .verticalScroll(scrollState, enabled = !isTransforming),
                 ) {
                     urls.forEachIndexed { index, url ->
-                        val ratio = illust.imagePages.getOrNull(index)?.aspectRatio ?: illust.aspectRatio
+                        val ratio = measuredRatios[index] ?: illust.imagePages.getOrNull(index)?.aspectRatio ?: illust.aspectRatio
                         GlideImage(
                             url = url,
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .then(if (index == 0) Modifier.padding(top = PuxivFullScreenTopBarHeight) else Modifier)
                                 .aspectRatio(ratio.coerceIn(0.18f, 4.5f)),
                             crop = false,
                             showLoadingBar = true,
@@ -5035,6 +5502,7 @@ private fun GlideImage(
     showLoadingBar: Boolean = false,
     requestSize: Int? = null,
     onDrawableSize: ((Int, Int) -> Unit)? = null,
+    animate: Boolean = true,
 ) {
     val background = MaterialTheme.colorScheme.surfaceVariant
     val imageModifier = if (aspectRatio != null) modifier.aspectRatio(aspectRatio) else modifier
@@ -5047,6 +5515,7 @@ private fun GlideImage(
             showLoadingBar = showLoadingBar,
             requestSize = requestSize,
             onDrawableSize = onDrawableSize,
+            animate = animate,
         )
         return
     }
@@ -5132,6 +5601,7 @@ private fun AnimatedGlideImage(
     showLoadingBar: Boolean = false,
     requestSize: Int? = null,
     onDrawableSize: ((Int, Int) -> Unit)? = null,
+    animate: Boolean = true,
 ) {
     val background = MaterialTheme.colorScheme.surfaceVariant
     val backgroundColor = background.toArgb()
@@ -5157,7 +5627,7 @@ private fun AnimatedGlideImage(
             update = { view ->
                 view.setBackgroundColor(backgroundColor)
                 view.scaleType = if (crop) ImageView.ScaleType.CENTER_CROP else ImageView.ScaleType.FIT_CENTER
-                val loadKey = "${imageUrl.orEmpty()}|${requestSize ?: 0}|$crop"
+                val loadKey = "${imageUrl.orEmpty()}|${requestSize ?: 0}|$crop|$animate"
                 if (view.tag == loadKey) return@AndroidView
                 view.tag = loadKey
                 if (imageUrl == null) {
@@ -5167,41 +5637,110 @@ private fun AnimatedGlideImage(
                     return@AndroidView
                 }
                 isLoading = true
-                val options = if (requestSize != null) {
-                    RequestOptions().override(requestSize)
-                } else {
-                    RequestOptions()
+                val isGif = imageUrl.isGifLike(view.context)
+                val baseOptions = RequestOptions().let { options ->
+                    if (requestSize != null && !imageUrl.isLocalUriGif(view.context)) {
+                        options.override(requestSize)
+                    } else {
+                        options
+                    }
                 }
-                Glide.with(view)
-                    .load(imageUrl.glideModel())
-                    .apply(options)
-                    .listener(object : RequestListener<Drawable> {
-                        override fun onLoadFailed(
-                            e: GlideException?,
-                            model: Any?,
-                            target: Target<Drawable>?,
-                            isFirstResource: Boolean,
-                        ): Boolean {
-                            isLoading = false
-                            return false
-                        }
+                if (isGif && !animate) {
+                    Glide.with(view)
+                        .asBitmap()
+                        .load(imageUrl.glideModel())
+                        .apply(baseOptions.disallowHardwareConfig())
+                        .listener(object : RequestListener<Bitmap> {
+                            override fun onLoadFailed(
+                                e: GlideException?,
+                                model: Any?,
+                                target: Target<Bitmap>?,
+                                isFirstResource: Boolean,
+                            ): Boolean {
+                                isLoading = false
+                                return false
+                            }
 
-                        override fun onResourceReady(
-                            resource: Drawable,
-                            model: Any?,
-                            target: Target<Drawable>?,
-                            dataSource: DataSource,
-                            isFirstResource: Boolean,
-                        ): Boolean {
-                            isLoading = false
-                            currentOnDrawableSize?.invoke(
-                                resource.intrinsicWidth.coerceAtLeast(1),
-                                resource.intrinsicHeight.coerceAtLeast(1),
-                            )
-                            return false
-                        }
-                    })
-                    .into(view)
+                            override fun onResourceReady(
+                                resource: Bitmap,
+                                model: Any?,
+                                target: Target<Bitmap>?,
+                                dataSource: DataSource,
+                                isFirstResource: Boolean,
+                            ): Boolean {
+                                isLoading = false
+                                currentOnDrawableSize?.invoke(
+                                    resource.width.coerceAtLeast(1),
+                                    resource.height.coerceAtLeast(1),
+                                )
+                                return false
+                            }
+                        })
+                        .into(view)
+                } else if (isGif) {
+                    Glide.with(view)
+                        .asGif()
+                        .load(imageUrl.glideModel())
+                        .apply(baseOptions)
+                        .listener(object : RequestListener<GifDrawable> {
+                            override fun onLoadFailed(
+                                e: GlideException?,
+                                model: Any?,
+                                target: Target<GifDrawable>?,
+                                isFirstResource: Boolean,
+                            ): Boolean {
+                                isLoading = false
+                                return false
+                            }
+
+                            override fun onResourceReady(
+                                resource: GifDrawable,
+                                model: Any?,
+                                target: Target<GifDrawable>?,
+                                dataSource: DataSource,
+                                isFirstResource: Boolean,
+                            ): Boolean {
+                                isLoading = false
+                                currentOnDrawableSize?.invoke(
+                                    resource.intrinsicWidth.coerceAtLeast(1),
+                                    resource.intrinsicHeight.coerceAtLeast(1),
+                                )
+                                return false
+                            }
+                        })
+                        .into(view)
+                } else {
+                    Glide.with(view)
+                        .load(imageUrl.glideModel())
+                        .apply(baseOptions)
+                        .listener(object : RequestListener<Drawable> {
+                            override fun onLoadFailed(
+                                e: GlideException?,
+                                model: Any?,
+                                target: Target<Drawable>?,
+                                isFirstResource: Boolean,
+                            ): Boolean {
+                                isLoading = false
+                                return false
+                            }
+
+                            override fun onResourceReady(
+                                resource: Drawable,
+                                model: Any?,
+                                target: Target<Drawable>?,
+                                dataSource: DataSource,
+                                isFirstResource: Boolean,
+                            ): Boolean {
+                                isLoading = false
+                                currentOnDrawableSize?.invoke(
+                                    resource.intrinsicWidth.coerceAtLeast(1),
+                                    resource.intrinsicHeight.coerceAtLeast(1),
+                                )
+                                return false
+                            }
+                        })
+                        .into(view)
+                }
             },
         )
         if (showLoadingBar && isLoading) {
@@ -5334,7 +5873,29 @@ private fun String.shouldUseDrawableGlide(): Boolean {
     return startsWith("content://", ignoreCase = true) ||
         startsWith("file://", ignoreCase = true) ||
         lower.endsWith(".gif") ||
-        lower.endsWith(".webp")
+            lower.endsWith(".webp")
+}
+
+private fun String.isGifLike(): Boolean {
+    return substringBefore('?')
+        .substringBefore('#')
+        .lowercase()
+        .endsWith(".gif")
+}
+
+private fun String.isGifLike(context: Context): Boolean {
+    if (isGifLike()) return true
+    if (!startsWith("content://", ignoreCase = true)) return false
+    return runCatching {
+        context.contentResolver.getType(toUri()).equals("image/gif", ignoreCase = true)
+    }.getOrDefault(false)
+}
+
+private fun String.isLocalUriGif(context: Context): Boolean {
+    return (
+        startsWith("content://", ignoreCase = true) ||
+            startsWith("file://", ignoreCase = true)
+        ) && isGifLike(context)
 }
 
 @Composable

@@ -8,7 +8,6 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import JunZi.Pixiv.ui.PuxivApp
-import JunZi.Pixiv.ui.theme.PuxivTheme
 
 class MainActivity : ComponentActivity() {
     private val viewModel: PixivViewModel by viewModels()
@@ -17,9 +16,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            PuxivTheme {
-                PuxivApp(viewModel = viewModel)
-            }
+            PuxivApp(viewModel = viewModel)
         }
         handlePixivCallback(intent)
     }

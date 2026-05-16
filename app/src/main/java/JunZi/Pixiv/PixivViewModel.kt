@@ -93,6 +93,31 @@ enum class PreviewSwipeMode {
     Horizontal,
 }
 
+enum class PuxivThemeMode {
+    System,
+    Light,
+    Dark,
+}
+
+enum class PuxivThemePalette {
+    Puxiv,
+    Sakura,
+    Mint,
+    Violet,
+    Amber,
+    Slate,
+    Custom,
+}
+
+@Immutable
+data class PuxivCustomPalette(
+    val primaryHex: String = "#1A9AFC",
+    val secondaryHex: String = "#5F6872",
+    val tertiaryHex: String = "#FF5A7A",
+    val backgroundHex: String = "#F6F6F6",
+    val surfaceHex: String = "#FFFFFF",
+)
+
 enum class UgoiraSaveFormat(val extension: String, val mimeType: String) {
     GIF("gif", "image/gif"),
     WEBP("webp", "image/webp"),
@@ -108,6 +133,7 @@ enum class DownloadStatus {
 enum class AuthorWorkTab(val apiValue: String) {
     Illust("illust"),
     Manga("manga"),
+    Bookmarks(""),
 }
 
 enum class FollowUserFeed {
@@ -229,6 +255,7 @@ data class AuthorState(
     val userAvatarUrl: String? = null,
     val userComment: String = "",
     val isFollowed: Boolean = false,
+    val followingCount: Int = 0,
     val followerCount: Int = 0,
     val myPixivCount: Int = 0,
     val totalIllusts: Int = 0,
@@ -237,6 +264,7 @@ data class AuthorState(
     val selectedTab: AuthorWorkTab = AuthorWorkTab.Illust,
     val illusts: FeedState = FeedState(),
     val manga: FeedState = FeedState(),
+    val bookmarks: FeedState = FeedState(),
     val isLoadingProfile: Boolean = false,
     val isLoadingWorks: Boolean = false,
     val isFollowBusy: Boolean = false,
@@ -251,6 +279,13 @@ private data class PreviewSnapshot(
     val ugoiraFrames: List<UgoiraFrameImage>,
     val ugoiraLoadedFrames: Int,
     val ugoiraTotalFrames: Int,
+    val returnScreen: AppScreen,
+)
+
+private data class NavigationEntry(
+    val screen: AppScreen,
+    val preview: PreviewSnapshot? = null,
+    val author: AuthorState? = null,
 )
 
 private data class DownloadWriteResult(
@@ -296,6 +331,10 @@ data class PuxivUiState(
     val ugoiraTotalFrames: Int = 0,
     val isFullScreenPreview: Boolean = false,
     val previewSwipeMode: PreviewSwipeMode = PreviewSwipeMode.Horizontal,
+    val themeMode: PuxivThemeMode = PuxivThemeMode.System,
+    val useMaterialYou: Boolean = false,
+    val themePalette: PuxivThemePalette = PuxivThemePalette.Puxiv,
+    val customPalette: PuxivCustomPalette = PuxivCustomPalette(),
     val useHostIpRouting: Boolean = true,
     val useRemoteImageProxy: Boolean = false,
     val imageProxyInput: String = PixivImageProxy.DEFAULT_PROXY_ORIGIN,
@@ -320,7 +359,7 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
         override fun onLost(network: Network) = updateVpnState()
         override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) = updateVpnState()
     }
-    private val backStack = ArrayDeque<AppScreen>()
+    private val backStack = ArrayDeque<NavigationEntry>()
     private val previewBackStack = ArrayDeque<PreviewSnapshot>()
     private var dnsWarmupAttempted = false
     val uiState: StateFlow<PuxivUiState> = _uiState
@@ -335,6 +374,10 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
         val filteredTagsInput = store.readFilteredTagsInput()
         val storedUgoiraFormat = store.readUgoiraSaveFormat()
         val ugoiraSaveFormat = UgoiraSaveFormat.entries.find { it.name == storedUgoiraFormat } ?: UgoiraSaveFormat.WEBP
+        val themeMode = store.readThemeMode()
+        val useMaterialYou = store.readUseMaterialYou()
+        val themePalette = store.readThemePalette()
+        val customPalette = store.readCustomThemePalette()
         val imageProxyOrigin = storedImageProxyOrigin
             ?.takeIf { PixivImageProxy.setProxyOrigin(it) }
             ?.let { PixivImageProxy.proxyOrigin }
@@ -356,6 +399,10 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
                 saveUgoiraZip = saveUgoiraZip,
                 filteredTagsInput = filteredTagsInput,
                 ugoiraSaveFormat = ugoiraSaveFormat,
+                themeMode = themeMode,
+                useMaterialYou = useMaterialYou,
+                themePalette = themePalette,
+                customPalette = customPalette,
             )
         }
         viewModelScope.launch {
@@ -437,18 +484,6 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
         if (shouldRefresh) search()
     }
 
-    fun loadPopularPreview() {
-        _uiState.update {
-            it.copy(
-                searchSort = SearchSort.PopularDesc,
-                searchStartDate = "",
-                searchEndDate = "",
-                searchBookmarkNum = "",
-            )
-        }
-        search()
-    }
-
     fun openHome() {
         navigateTo(AppScreen.Home, addToBackStack = false)
         loadHome(refresh = false)
@@ -494,6 +529,56 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
     fun updatePreviewSwipeMode(mode: PreviewSwipeMode) {
         store.savePreviewSwipeMode(mode)
         _uiState.update { it.copy(previewSwipeMode = mode) }
+    }
+
+    fun updateThemeMode(mode: PuxivThemeMode) {
+        store.saveThemeMode(mode)
+        _uiState.update {
+            it.copy(
+                themeMode = mode,
+                message = when (mode) {
+                    PuxivThemeMode.System -> "主题已跟随系统"
+                    PuxivThemeMode.Light -> "已切换到亮色主题"
+                    PuxivThemeMode.Dark -> "已切换到暗色主题"
+                },
+            )
+        }
+    }
+
+    fun updateMaterialYouEnabled(enabled: Boolean) {
+        store.saveUseMaterialYou(enabled)
+        _uiState.update {
+            it.copy(
+                useMaterialYou = enabled,
+                message = if (enabled) {
+                    "已启用 Material You 动态取色"
+                } else {
+                    "已关闭 Material You，使用自定义调色板"
+                },
+            )
+        }
+    }
+
+    fun updateThemePalette(palette: PuxivThemePalette) {
+        store.saveThemePalette(palette)
+        _uiState.update {
+            it.copy(
+                themePalette = palette,
+                message = "调色板已切换为 ${palette.messageLabel()}",
+            )
+        }
+    }
+
+    fun updateCustomThemePalette(palette: PuxivCustomPalette) {
+        store.saveCustomThemePalette(palette)
+        store.saveThemePalette(PuxivThemePalette.Custom)
+        _uiState.update {
+            it.copy(
+                customPalette = palette,
+                themePalette = PuxivThemePalette.Custom,
+                message = "自定义调色板已保存",
+            )
+        }
     }
 
     fun updateSaveUgoiraZip(enabled: Boolean) {
@@ -640,12 +725,12 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun searchTrendingTag(tag: TrendingTag) {
+        val keyword = tag.name.trim().trimStart('#')
+        if (keyword.isBlank()) return
         navigateTo(AppScreen.Search)
         _uiState.update {
             it.copy(
-                keyword = tag.name,
-                searchTarget = SearchTarget.Partial,
-                searchSort = SearchSort.PopularDesc,
+                keyword = keyword,
             )
         }
         search()
@@ -658,8 +743,6 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update {
             it.copy(
                 keyword = keyword,
-                searchTarget = SearchTarget.Partial,
-                searchSort = SearchSort.DateDesc,
                 isFullScreenPreview = false,
             )
         }
@@ -1777,9 +1860,6 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
         userAccount: String,
         userAvatarUrl: String?,
     ) {
-        if (_uiState.value.screen == AppScreen.Preview && backStack.lastOrNull() != AppScreen.Preview) {
-            backStack.addLast(AppScreen.Preview)
-        }
         navigateTo(AppScreen.Author)
         _uiState.update {
             it.copy(
@@ -1852,7 +1932,10 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
             runCatching {
                 withAccessToken { token ->
                     if (refresh) {
-                        repository.userWorks(authorId, token, tab.apiValue)
+                        when (tab) {
+                            AuthorWorkTab.Bookmarks -> repository.bookmarkedIllusts(authorId, token)
+                            else -> repository.userWorks(authorId, token, tab.apiValue)
+                        }
                     } else {
                         val nextUrl = _uiState.value.author.feed(tab).nextUrl ?: return@withAccessToken null
                         repository.nextPage(nextUrl, token)
@@ -1910,7 +1993,6 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
                             author = it.author.copy(
                                 isFollowBusy = false,
                                 isFollowed = true,
-                                followerCount = it.author.followerCount + 1,
                             ),
                             message = if (restrict == BookmarkRestrict.Private) "已悄悄关注作者" else "已关注作者",
                         )
@@ -1943,7 +2025,6 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
                             author = it.author.copy(
                                 isFollowBusy = false,
                                 isFollowed = false,
-                                followerCount = (it.author.followerCount - 1).coerceAtLeast(0),
                             ),
                             message = "已取消关注作者",
                         )
@@ -2056,6 +2137,7 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
                     ugoiraFrames = previous.ugoiraFrames,
                     ugoiraLoadedFrames = previous.ugoiraLoadedFrames,
                     ugoiraTotalFrames = previous.ugoiraTotalFrames,
+                    previewReturnScreen = previous.returnScreen,
                     isFullScreenPreview = false,
                     isPreviewLoading = false,
                     message = null,
@@ -2063,21 +2145,39 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
             }
             return
         }
-        val target = backStack.removeLastOrNull() ?: current.defaultBackTarget()
+        val targetEntry = backStack.removeLastOrNull()
+        val target = targetEntry?.screen ?: current.defaultBackTarget()
         if (current == AppScreen.Preview) {
             previewBackStack.clear()
         }
         _uiState.update { state ->
+            val previewSnapshot = targetEntry?.preview?.takeIf { target == AppScreen.Preview }
+            val authorSnapshot = targetEntry?.author?.takeIf {
+                target == AppScreen.Author && state.author.userId != it.userId
+            }
             state.copy(
                 screen = target,
-                selectedIllust = if (current == AppScreen.Preview) null else state.selectedIllust,
-                author = if (current == AppScreen.Author && target != AppScreen.Preview) AuthorState() else state.author,
-                related = if (current == AppScreen.Preview) FeedState() else state.related,
-                comments = if (current == AppScreen.Preview) CommentState() else state.comments,
-                ugoiraFrames = if (current == AppScreen.Preview) emptyList() else state.ugoiraFrames,
-                ugoiraLoadedFrames = if (current == AppScreen.Preview) 0 else state.ugoiraLoadedFrames,
-                ugoiraTotalFrames = if (current == AppScreen.Preview) 0 else state.ugoiraTotalFrames,
-                isFullScreenPreview = if (current == AppScreen.Preview) false else state.isFullScreenPreview,
+                selectedIllust = when {
+                    previewSnapshot != null -> previewSnapshot.illust
+                    current == AppScreen.Preview -> null
+                    else -> state.selectedIllust
+                },
+                selectedImageIndex = previewSnapshot?.selectedImageIndex
+                    ?: if (current == AppScreen.Preview) 0 else state.selectedImageIndex,
+                author = when {
+                    authorSnapshot != null -> authorSnapshot
+                    current == AppScreen.Author && target != AppScreen.Preview -> AuthorState()
+                    else -> state.author
+                },
+                related = previewSnapshot?.related ?: if (current == AppScreen.Preview) FeedState() else state.related,
+                comments = previewSnapshot?.comments ?: if (current == AppScreen.Preview) CommentState() else state.comments,
+                ugoiraFrames = previewSnapshot?.ugoiraFrames ?: if (current == AppScreen.Preview) emptyList() else state.ugoiraFrames,
+                ugoiraLoadedFrames = previewSnapshot?.ugoiraLoadedFrames ?: if (current == AppScreen.Preview) 0 else state.ugoiraLoadedFrames,
+                ugoiraTotalFrames = previewSnapshot?.ugoiraTotalFrames ?: if (current == AppScreen.Preview) 0 else state.ugoiraTotalFrames,
+                previewReturnScreen = previewSnapshot?.returnScreen ?: state.previewReturnScreen,
+                isFullScreenPreview = if (previewSnapshot != null || current == AppScreen.Preview) false else state.isFullScreenPreview,
+                isPreviewLoading = if (previewSnapshot != null || current == AppScreen.Preview) false else state.isPreviewLoading,
+                message = null,
             )
         }
         when (target) {
@@ -2110,9 +2210,11 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun pushBackStack(screen: AppScreen) {
-        if (screen == AppScreen.Preview) return
-        if (backStack.lastOrNull() == screen) return
-        backStack.addLast(screen)
+        val entry = _uiState.value.toNavigationEntry(screen) ?: return
+        if (backStack.lastOrNull()?.screen == screen) {
+            backStack.removeLast()
+        }
+        backStack.addLast(entry)
     }
 
     private fun resetNavigation(screen: AppScreen) {
@@ -2644,7 +2746,20 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
             ugoiraFrames = ugoiraFrames,
             ugoiraLoadedFrames = ugoiraLoadedFrames,
             ugoiraTotalFrames = ugoiraTotalFrames,
+            returnScreen = previewReturnScreen,
         )
+    }
+
+    private fun PuxivUiState.toNavigationEntry(screen: AppScreen): NavigationEntry? {
+        return when (screen) {
+            AppScreen.Preview -> selectedIllust?.let {
+                NavigationEntry(screen = screen, preview = toPreviewSnapshot())
+            }
+            AppScreen.Author -> author.userId?.let {
+                NavigationEntry(screen = screen, author = author.navigationSnapshot())
+            }
+            else -> NavigationEntry(screen = screen)
+        }
     }
 
     private fun Throwable.readableMessage(): String {
@@ -2780,10 +2895,18 @@ private fun MyState.withBookmarkState(illustId: Long, isBookmarked: Boolean): My
 private fun AuthorState.withBookmarkState(illustId: Long, isBookmarked: Boolean): AuthorState {
     val updatedIllusts = illusts.withBookmarkState(illustId, isBookmarked)
     val updatedManga = manga.withBookmarkState(illustId, isBookmarked)
-    if (updatedIllusts === illusts && updatedManga === manga) return this
+    val updatedBookmarks = bookmarks.withBookmarkState(illustId, isBookmarked)
+    if (
+        updatedIllusts === illusts &&
+        updatedManga === manga &&
+        updatedBookmarks === bookmarks
+    ) {
+        return this
+    }
     return copy(
         illusts = updatedIllusts,
         manga = updatedManga,
+        bookmarks = updatedBookmarks,
     )
 }
 
@@ -2791,6 +2914,7 @@ private fun AuthorState.feed(tab: AuthorWorkTab): FeedState {
     return when (tab) {
         AuthorWorkTab.Illust -> illusts
         AuthorWorkTab.Manga -> manga
+        AuthorWorkTab.Bookmarks -> bookmarks
     }
 }
 
@@ -2798,6 +2922,7 @@ private fun AuthorState.withFeed(tab: AuthorWorkTab, transform: (FeedState) -> F
     return when (tab) {
         AuthorWorkTab.Illust -> copy(illusts = transform(illusts))
         AuthorWorkTab.Manga -> copy(manga = transform(manga))
+        AuthorWorkTab.Bookmarks -> copy(bookmarks = transform(bookmarks))
     }
 }
 
@@ -2809,11 +2934,23 @@ private fun AuthorState.mergeProfile(profile: AuthorProfile): AuthorState {
         userAvatarUrl = profile.avatarUrl,
         userComment = profile.comment,
         isFollowed = profile.isFollowed,
+        followingCount = profile.followingCount,
         followerCount = profile.followerCount,
         myPixivCount = profile.myPixivCount,
         totalIllusts = profile.totalIllusts,
         totalManga = profile.totalManga,
         totalBookmarks = profile.totalBookmarks,
+    )
+}
+
+private fun AuthorState.navigationSnapshot(): AuthorState {
+    return copy(
+        isLoadingProfile = false,
+        isLoadingWorks = false,
+        isFollowBusy = false,
+        illusts = illusts.copy(isLoading = false),
+        manga = manga.copy(isLoading = false),
+        bookmarks = bookmarks.copy(isLoading = false),
     )
 }
 
@@ -2928,6 +3065,18 @@ private fun normalizeFilteredTagsInput(value: String): String {
         .filter { it.isNotBlank() }
         .distinctBy { it.lowercase(Locale.ROOT) }
         .joinToString(",")
+}
+
+private fun PuxivThemePalette.messageLabel(): String {
+    return when (this) {
+        PuxivThemePalette.Puxiv -> "Puxiv 蓝"
+        PuxivThemePalette.Sakura -> "樱花"
+        PuxivThemePalette.Mint -> "薄荷"
+        PuxivThemePalette.Violet -> "紫罗兰"
+        PuxivThemePalette.Amber -> "琥珀"
+        PuxivThemePalette.Slate -> "青石"
+        PuxivThemePalette.Custom -> "自定义"
+    }
 }
 
 private fun PuxivUiState.excludedTags(): Set<String> {
