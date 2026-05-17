@@ -4,9 +4,8 @@ import java.util.concurrent.ConcurrentHashMap
 
 object PixivNetworkConfig {
     /**
-     * `host -> 实时 IP 列表` 缓存。**初始为空**——只由 [PixivDnsUpdater] 写入。
-     * 调用方拿到空列表时应回退到系统 DNS（OkHttp 这条路径见 [PixivDns]），
-     * 而不是回到任何硬编码 IP。
+     * `host -> 实时 IP 列表` 缓存。由 [PixivDnsUpdater] 拉取，启动时可从本地持久化缓存恢复。
+     * 兼容路由开启时，调用方拿到空列表必须等待刷新或直接失败，不能回退系统 DNS。
      */
     private val hostToIps = ConcurrentHashMap<String, List<String>>()
 
@@ -28,8 +27,8 @@ object PixivNetworkConfig {
         val normalized = host?.trim()?.lowercase()?.removeSuffix(".") ?: return emptyList()
         hostToIps[normalized]?.let { return it }
         // *.pximg.net / *.pixivision.net 这两类子域和主域共用同一组 IP，
-        // 命中主域的运行时记录就直接复用；其它通配 host 在缓存里没值时
-        // 留给上层走系统 DNS，不再回退到硬编码。
+        // 命中主域的运行时记录就直接复用；其它通配 host 在缓存里没值时返回空，
+        // 由调用方等待动态路由就绪或对非 Pixiv 域名显式走普通网络路径。
         return when {
             normalized.endsWith(".pximg.net") -> hostToIps[PixivHost.Image.rawHost].orEmpty()
             normalized.endsWith(".pixivision.net") -> hostToIps[PixivHost.Pixivision.rawHost].orEmpty()
@@ -43,14 +42,44 @@ object PixivNetworkConfig {
 
     fun update(host: PixivHost, ips: List<String>) {
         val cleaned = ips.map { it.trim() }
-            .filter { it.isNotBlank() }
+            .filter { IPV4_REGEX.matches(it) }
             .distinct()
         if (cleaned.isNotEmpty()) {
             hostToIps[host.rawHost] = cleaned
         }
     }
 
+    fun replaceAll(hostIps: Map<String, List<String>>) {
+        hostToIps.clear()
+        hostIps.forEach { (host, ips) ->
+            val normalized = host.trim().lowercase().removeSuffix(".")
+            val cleaned = ips.map { it.trim() }
+                .filter { IPV4_REGEX.matches(it) }
+                .distinct()
+            if (normalized.isNotBlank() && cleaned.isNotEmpty()) {
+                hostToIps[normalized] = cleaned
+            }
+        }
+    }
+
+    fun hasAnyAddress(): Boolean = hostToIps.isNotEmpty()
+
+    fun hasAddressFor(host: String): Boolean = addressesFor(host).isNotEmpty()
+
+    fun requiresDynamicRoute(host: String?): Boolean {
+        val normalized = host?.trim()?.lowercase()?.removeSuffix(".") ?: return false
+        return PixivHost.from(normalized) != null ||
+            normalized.endsWith(".pximg.net") ||
+            normalized.endsWith(".pixivision.net")
+    }
+
     fun snapshot(): Map<String, String> = hostToIps
         .toSortedMap()
         .mapValues { (_, ips) -> ips.joinToString(",") }
+
+    fun snapshotIps(): Map<String, List<String>> = hostToIps
+        .toSortedMap()
+        .mapValues { (_, ips) -> ips.toList() }
+
+    private val IPV4_REGEX = Regex("""\d{1,3}(\.\d{1,3}){3}""")
 }

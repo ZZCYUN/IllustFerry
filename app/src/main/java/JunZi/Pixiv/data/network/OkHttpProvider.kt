@@ -79,9 +79,11 @@ object OkHttpProvider {
 
             val builder = request.newBuilder()
             if (pixivHost?.isApiHost == true) {
-                PixivNetworkConfig.ipFor(originalHost)
-                    ?.takeIf { it != originalHost }
-                    ?.let { ip -> builder.url(request.url.newBuilder().host(ip).build()) }
+                val ip = PixivNetworkConfig.ipFor(originalHost)
+                    ?: throw IOException("No dynamic IP for $originalHost; request blocked until API route is ready")
+                if (ip != originalHost) {
+                    builder.url(request.url.newBuilder().host(ip).build())
+                }
             }
             PixivHeaders.addAppHeaders(builder, pixivHost?.takeIf { it.isApiHost }?.rawHost)
             return chain.proceed(builder.build())

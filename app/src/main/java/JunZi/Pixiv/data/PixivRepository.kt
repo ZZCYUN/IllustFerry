@@ -31,6 +31,7 @@ import JunZi.Pixiv.data.model.toDomain
 import JunZi.Pixiv.data.network.DnsRefreshResult
 import JunZi.Pixiv.data.network.PixivApiClient
 import JunZi.Pixiv.data.network.PixivDnsUpdater
+import JunZi.Pixiv.data.network.PixivNetworkConfig
 import com.aureusapps.android.webpandroid.encoder.WebPAnimEncoder
 import com.aureusapps.android.webpandroid.encoder.WebPAnimEncoderOptions
 import com.aureusapps.android.webpandroid.encoder.WebPConfig
@@ -67,6 +68,13 @@ class PixivRepository(
 
     suspend fun refreshDns(): DnsRefreshResult {
         return dnsUpdater.refresh()
+    }
+
+    suspend fun ensureDynamicHostIps(): DnsRefreshResult {
+        if (!PixivNetworkConfig.shouldUseCompatibilityClient() || PixivNetworkConfig.hasAnyAddress()) {
+            return DnsRefreshResult(updated = emptyMap(), errors = emptyMap())
+        }
+        return dnsUpdater.refresh().requireAnyUpdated()
     }
 
     suspend fun recommended(token: String): IllustPage {

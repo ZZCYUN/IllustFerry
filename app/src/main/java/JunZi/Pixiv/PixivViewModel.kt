@@ -44,6 +44,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -51,6 +52,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Locale
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 private fun nonBlankStringOrNull(value: String?): String? {
     return value?.takeIf { it.isNotBlank() }
@@ -455,6 +458,7 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
     }
     private val backStack = ArrayDeque<NavigationEntry>()
     private val previewBackStack = ArrayDeque<PreviewSnapshot>()
+    private val dnsWarmupMutex = Mutex()
     private var dnsWarmupAttempted = false
     val uiState: StateFlow<PuxivUiState> = _uiState
 
@@ -478,6 +482,7 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
             ?: PixivImageProxy.DEFAULT_PROXY_ORIGIN
         PixivNetworkConfig.useHostIpRouting = useHostIpRouting
         PixivNetworkConfig.isVpnActive = isVpnActive()
+        PixivNetworkConfig.replaceAll(store.readDynamicHostIps())
         PixivImageProxy.useRemoteProxy = useRemoteImageProxy
         _uiState.update {
             it.copy(
@@ -497,10 +502,13 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
                 useMaterialYou = useMaterialYou,
                 themePalette = themePalette,
                 customPalette = customPalette,
+                home = it.home.copy(
+                    diagnostics = it.home.diagnostics.copy(hostSnapshot = PixivNetworkConfig.snapshot()),
+                ),
             )
         }
         viewModelScope.launch {
-            if (PixivNetworkConfig.shouldUseCompatibilityClient()) refreshDns(showMessage = false)
+            if (PixivNetworkConfig.shouldUseCompatibilityClient()) warmupDnsIfNeeded(forceRefresh = true)
             loadHome(refresh = false)
         }
         registerNetworkCallback()
@@ -756,7 +764,7 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
 
     fun updateHostIpRoutingEnabled(enabled: Boolean) {
         PixivNetworkConfig.useHostIpRouting = enabled
-        dnsWarmupAttempted = !enabled
+        dnsWarmupAttempted = !enabled || PixivNetworkConfig.hasAddressFor(APP_API_HOST)
         store.saveUseHostIpRouting(enabled)
         _uiState.update {
             it.copy(
@@ -767,6 +775,9 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
                     "已关闭 Host/IP 兼容路由，HTTP 请求将绕过系统代理"
                 },
             )
+        }
+        if (enabled && !PixivNetworkConfig.hasAddressFor(APP_API_HOST)) {
+            viewModelScope.launch { warmupDnsIfNeeded(forceRefresh = true) }
         }
     }
 
@@ -924,45 +935,16 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
         viewModelScope.launch {
-            val dnsResult = if (PixivNetworkConfig.shouldUseCompatibilityClient()) {
-                runCatching { repository.refreshDns() }
+            val routeResult = if (PixivNetworkConfig.shouldUseCompatibilityClient()) {
+                runCatching { warmupDnsIfNeeded(forceRefresh = true) }
             } else {
-                Result.success(null)
+                Result.success(Unit)
             }
-            dnsWarmupAttempted = true
-            dnsResult
-                .onSuccess { result ->
-                    if (result == null) return@onSuccess
-                    _uiState.update { state ->
-                        state.copy(
-                            home = state.home.copy(
-                                diagnostics = state.home.diagnostics.copy(
-                                    lastDnsResult = result.summary,
-                                    hostSnapshot = PixivNetworkConfig.snapshot(),
-                                    lastError = result.errors.values.firstOrNull(),
-                                ),
-                            ),
-                        )
-                    }
-                }
-                .onFailure { error ->
-                    _uiState.update { state ->
-                        state.copy(
-                            home = state.home.copy(
-                                diagnostics = state.home.diagnostics.copy(
-                                    lastDnsResult = "DNS 更新失败",
-                                    hostSnapshot = PixivNetworkConfig.snapshot(),
-                                    lastError = error.readableMessage(),
-                                ),
-                            ),
-                        )
-                    }
-                }
             _uiState.update {
                 it.copy(
-                    loginUrl = OAuthPkce.loginUrl(verifier),
-                    message = dnsResult.exceptionOrNull()?.let { error ->
-                        "DNS 更新失败，使用内置备用地址继续：${error.readableMessage()}"
+                    loginUrl = if (routeResult.isSuccess) OAuthPkce.loginUrl(verifier) else "",
+                    message = routeResult.exceptionOrNull()?.let { error ->
+                        "动态 Host IP 获取失败，等待获取成功后再继续：${error.readableMessage()}"
                     },
                 )
             }
@@ -1064,6 +1046,7 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
             }
             runCatching {
                 if (anonymousWalkthrough) {
+                    warmupDnsIfNeeded()
                     repository.walkthrough()
                 } else {
                     withAccessToken { accessToken ->
@@ -1593,8 +1576,9 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         viewModelScope.launch {
-            runCatching { repository.refreshDns() }
+            runCatching { refreshAndPersistDns().requireAnyUpdated() }
                 .onSuccess { result ->
+                    dnsWarmupAttempted = true
                     _uiState.update { state ->
                         state.copy(
                             home = state.home.copy(
@@ -1644,7 +1628,7 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
                     ),
                 )
             }
-            val dnsResult = runCatching { repository.refreshDns() }
+            val dnsResult = runCatching { refreshAndPersistDns().requireAnyUpdated() }
             val apiResult = runCatching { withAccessToken { repository.recommended(it) } }
             val probeUrl = apiResult.getOrNull()?.items?.firstOrNull()?.previewUrl
                 ?: _uiState.value.home.illust.recommended.items.firstOrNull()?.previewUrl
@@ -3634,38 +3618,91 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
         return refreshed
     }
 
-    private suspend fun warmupDnsIfNeeded() {
+    private suspend fun warmupDnsIfNeeded(forceRefresh: Boolean = false) {
         if (!_uiState.value.useHostIpRouting) return
         if (PixivNetworkConfig.isVpnActive) return
-        if (dnsWarmupAttempted) return
-        dnsWarmupAttempted = true
-        runCatching { repository.refreshDns() }
-            .onSuccess { result ->
-                _uiState.update { state ->
-                    state.copy(
-                        home = state.home.copy(
-                            diagnostics = state.home.diagnostics.copy(
-                                lastDnsResult = result.summary,
-                                hostSnapshot = PixivNetworkConfig.snapshot(),
-                                lastError = result.errors.values.firstOrNull(),
-                            ),
-                        ),
-                    )
-                }
+        if (!forceRefresh && dnsWarmupAttempted && PixivNetworkConfig.hasAddressFor(APP_API_HOST)) return
+        dnsWarmupMutex.withLock {
+            if (!forceRefresh && dnsWarmupAttempted && PixivNetworkConfig.hasAddressFor(APP_API_HOST)) return
+            if (!forceRefresh && PixivNetworkConfig.hasAddressFor(APP_API_HOST)) {
+                dnsWarmupAttempted = true
+                return
             }
-            .onFailure { error ->
-                _uiState.update { state ->
-                    state.copy(
-                        home = state.home.copy(
-                            diagnostics = state.home.diagnostics.copy(
-                                lastDnsResult = "DNS 更新失败",
-                                hostSnapshot = PixivNetworkConfig.snapshot(),
-                                lastError = error.readableMessage(),
+            val result = runCatching { refreshAndPersistDns().requireAnyUpdated() }
+            dnsWarmupAttempted = result.isSuccess
+            result
+                .onSuccess { dnsResult ->
+                    _uiState.update { state ->
+                        state.copy(
+                            home = state.home.copy(
+                                diagnostics = state.home.diagnostics.copy(
+                                    lastDnsResult = dnsResult.summary,
+                                    hostSnapshot = PixivNetworkConfig.snapshot(),
+                                    lastError = dnsResult.errors.values.firstOrNull(),
+                                ),
                             ),
-                        ),
-                    )
+                        )
+                    }
                 }
+                .onFailure { error ->
+                    val hasPersistedOrRuntimeIp = PixivNetworkConfig.hasAddressFor(APP_API_HOST)
+                    _uiState.update { state ->
+                        state.copy(
+                            home = state.home.copy(
+                                diagnostics = state.home.diagnostics.copy(
+                                    lastDnsResult = if (hasPersistedOrRuntimeIp) {
+                                        "动态 Host IP 获取失败，使用持久化缓存"
+                                    } else {
+                                        "动态 Host IP 获取失败"
+                                    },
+                                    hostSnapshot = PixivNetworkConfig.snapshot(),
+                                    lastError = error.readableMessage(),
+                                ),
+                            ),
+                        )
+                    }
+                }
+            while (!PixivNetworkConfig.hasAddressFor(APP_API_HOST)) {
+                delay(DNS_RETRY_DELAY_MS)
+                val retry = runCatching { refreshAndPersistDns().requireAnyUpdated() }
+                dnsWarmupAttempted = retry.isSuccess
+                retry
+                    .onSuccess { dnsResult ->
+                        _uiState.update { state ->
+                            state.copy(
+                                home = state.home.copy(
+                                    diagnostics = state.home.diagnostics.copy(
+                                        lastDnsResult = dnsResult.summary,
+                                        hostSnapshot = PixivNetworkConfig.snapshot(),
+                                        lastError = dnsResult.errors.values.firstOrNull(),
+                                    ),
+                                ),
+                            )
+                        }
+                    }
+                    .onFailure { error ->
+                        _uiState.update { state ->
+                            state.copy(
+                                home = state.home.copy(
+                                    diagnostics = state.home.diagnostics.copy(
+                                        lastDnsResult = "动态 Host IP 获取失败，等待重试",
+                                        hostSnapshot = PixivNetworkConfig.snapshot(),
+                                        lastError = error.readableMessage(),
+                                    ),
+                                ),
+                            )
+                        }
+                    }
             }
+        }
+    }
+
+    private suspend fun refreshAndPersistDns(): JunZi.Pixiv.data.network.DnsRefreshResult {
+        val result = repository.refreshDns()
+        if (result.updated.isNotEmpty()) {
+            store.saveDynamicHostIps(PixivNetworkConfig.snapshotIps())
+        }
+        return result
     }
 
     private fun shouldRefreshSearchAfterParamChange(): Boolean {
@@ -3787,6 +3824,11 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
         val activeNetwork = connectivityManager.activeNetwork ?: return false
         return connectivityManager.getNetworkCapabilities(activeNetwork)
             ?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+    }
+
+    private companion object {
+        const val APP_API_HOST = "app-api.pixiv.net"
+        const val DNS_RETRY_DELAY_MS = 2_000L
     }
 }
 

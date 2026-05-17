@@ -3,11 +3,9 @@ package JunZi.Pixiv.data.network
 /**
  * 已知的 Pixiv 域名清单。
  *
- * 这里**不再保留任何兜底 IP**——所有可路由 IP 由 [PixivDnsUpdater] 在运行时
- * 通过外部 DoH 端点拉回来，写入 [PixivNetworkConfig.hostToIps]。运行时表为空
- * 时（首次启动且 DoH 还没回来、或 DoH 整个挂掉），调用方应回退到系统 DNS，
- * 而不是回到 APK 里固化的"过期 IP"——这正是把 210.140.131.199 长期排在
- * 候选首位、把 MITM 拖慢 N×20 秒的根因。
+ * 这里不保留任何兜底 IP。所有可路由 IP 由 [PixivDnsUpdater] 在运行时拉取，并由
+ * [JunZi.Pixiv.data.auth.TokenStore] 持久化。兼容路由开启时，运行时表为空就等待拉取
+ * 或使用上次持久化结果，绝不回退系统 DNS。
  */
 enum class PixivHost(
     val rawHost: String,

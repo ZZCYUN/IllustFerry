@@ -102,6 +102,34 @@ class TokenStore(context: Context) {
         preferences.edit { putBoolean(KEY_USE_HOST_IP_ROUTING, enabled) }
     }
 
+    fun readDynamicHostIps(): Map<String, List<String>> {
+        val json = preferences.getString(KEY_DYNAMIC_HOST_IPS, null)?.takeIf { it.isNotBlank() } ?: return emptyMap()
+        return runCatching {
+            val parsed: Map<String, List<String>?>? = gson.fromJson(json, HOST_IPS_TYPE)
+            parsed.orEmpty()
+                .mapKeys { (host, _) -> host.trim().lowercase().removeSuffix(".") }
+                .mapValues { (_, ips) ->
+                    ips.orEmpty()
+                        .map { it.trim() }
+                        .filter { IPV4_PATTERN.matches(it) }
+                        .distinct()
+                }
+                .filter { (host, ips) -> host.isNotBlank() && ips.isNotEmpty() }
+        }.getOrDefault(emptyMap())
+    }
+
+    fun saveDynamicHostIps(hostIps: Map<String, List<String>>) {
+        val normalized = hostIps
+            .mapKeys { (host, _) -> host.trim().lowercase().removeSuffix(".") }
+            .mapValues { (_, ips) ->
+                ips.map { it.trim() }
+                    .filter { IPV4_PATTERN.matches(it) }
+                    .distinct()
+            }
+            .filter { (host, ips) -> host.isNotBlank() && ips.isNotEmpty() }
+        preferences.edit { putString(KEY_DYNAMIC_HOST_IPS, gson.toJson(normalized)) }
+    }
+
     fun readImageProxyOrigin(): String? {
         return preferences.getString(KEY_IMAGE_PROXY_ORIGIN, null)?.takeIf { it.isNotBlank() }
     }
@@ -219,6 +247,7 @@ class TokenStore(context: Context) {
         const val KEY_DOWNLOADS = "downloads"
         const val KEY_USE_REMOTE_IMAGE_PROXY = "use_remote_image_proxy"
         const val KEY_USE_HOST_IP_ROUTING = "use_host_ip_routing"
+        const val KEY_DYNAMIC_HOST_IPS = "dynamic_host_ips"
         const val KEY_IMAGE_PROXY_ORIGIN = "image_proxy_origin"
         const val KEY_PREVIEW_SWIPE_MODE = "preview_swipe_mode"
         const val KEY_SAVE_UGOIRA_ZIP = "save_ugoira_zip"
@@ -230,6 +259,8 @@ class TokenStore(context: Context) {
         const val KEY_CUSTOM_THEME_PALETTE = "custom_theme_palette"
         const val MAX_STORED_DOWNLOADS = 200
         val DOWNLOAD_LIST_TYPE = object : TypeToken<List<DownloadItem?>>() {}.type
+        val HOST_IPS_TYPE = object : TypeToken<Map<String, List<String>?>>() {}.type
+        val IPV4_PATTERN = Regex("""\d{1,3}(\.\d{1,3}){3}""")
     }
 }
 

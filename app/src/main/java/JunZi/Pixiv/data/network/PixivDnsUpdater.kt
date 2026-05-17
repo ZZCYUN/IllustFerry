@@ -18,6 +18,12 @@ data class DnsRefreshResult(
             append("更新 ${updated.size} 个 host")
             if (errors.isNotEmpty()) append("，失败 ${errors.size} 个")
         }
+
+    fun requireAnyUpdated(): DnsRefreshResult {
+        if (updated.isNotEmpty()) return this
+        val detail = errors.entries.joinToString("; ") { (host, error) -> "$host: $error" }
+        throw IOException("动态 Host IP 获取失败${detail.takeIf { it.isNotBlank() }?.let { "：$it" }.orEmpty()}")
+    }
 }
 
 class PixivDnsUpdater(

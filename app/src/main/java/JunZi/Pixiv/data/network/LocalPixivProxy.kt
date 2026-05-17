@@ -238,8 +238,7 @@ class LocalPixivProxy(
      * 给 MITM 链路用：把 TCP 和 TLS 握手当成一对原子操作做候选回退。
      * 之前的 connectUpstream 只在 TCP 层 break，一旦 172.64.x 这种 IP TCP 通了但
      * TLS 被对端（或 GFW）RST，整条 MITM 就死了。OkHttp 默认就是 TCP+TLS 一起重试，
-     * 这里复现同样语义，并把内置 PixivHost 的 fallback IP 也拼进候选，
-     * 即便运行时 DNS 把列表收窄成单点，也还有兜底可试。
+     * 这里复现同样语义，但候选只能来自运行时/持久化的动态 Host IP 表。
      */
     private fun openMitmUpstream(host: String, port: Int, timeoutMillis: Int): Pair<Socket, SSLSocket> {
         val candidates = mitmUpstreamCandidates(host)
@@ -268,11 +267,12 @@ class LocalPixivProxy(
     }
 
     private fun mitmUpstreamCandidates(host: String): List<String> {
-        // 候选只来自 PixivNetworkConfig（即 PixivDnsUpdater 实时拉回来的运行时 host 表）。
-        // 拿不到值时退化到字面 host，让底层 Socket 走系统 DNS——而不是再回退到任何
-        // 出厂硬编码 IP。这样做是为了避免 dead IP（如 210.140.131.199）长期占据首位、
-        // 每条连接都先空转 20 秒。
-        return (PixivNetworkConfig.addressesFor(host) + host).distinct()
+        val mapped = PixivNetworkConfig.addressesFor(host)
+        if (mapped.isNotEmpty()) return mapped
+        if (!PixivNetworkConfig.requiresDynamicRoute(host)) return listOf(host)
+        return mapped.ifEmpty {
+            throw IOException("No dynamic IP for $host; proxy upstream is not ready")
+        }
     }
 
     private fun handleHttp(client: Socket, clientInput: InputStream, requestLine: RequestLine) {
@@ -337,7 +337,14 @@ class LocalPixivProxy(
     }
 
     private fun connectUpstream(host: String, port: Int, timeoutMillis: Int): Socket {
-        val candidates = (PixivNetworkConfig.addressesFor(host) + host).distinct()
+        val mapped = PixivNetworkConfig.addressesFor(host)
+        val candidates = if (mapped.isNotEmpty()) {
+            mapped
+        } else if (PixivNetworkConfig.requiresDynamicRoute(host)) {
+            throw IOException("No dynamic IP for $host; proxy upstream is not ready")
+        } else {
+            listOf(host)
+        }
         var lastFailure: IOException? = null
         candidates.forEach { candidate ->
             val socket = trackSocket(Socket())
