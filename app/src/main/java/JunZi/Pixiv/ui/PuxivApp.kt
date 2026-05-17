@@ -1,9 +1,12 @@
 package JunZi.Pixiv.ui
 
 import JunZi.Pixiv.AppScreen
+import JunZi.Pixiv.SeriesState
+import JunZi.Pixiv.NovelReaderState
 import JunZi.Pixiv.AuthorWorkTab
 import JunZi.Pixiv.AuthorState
 import JunZi.Pixiv.BookmarkFeed
+import JunZi.Pixiv.BookmarkKind
 import JunZi.Pixiv.CommentState
 import JunZi.Pixiv.DiscoverFeed
 import JunZi.Pixiv.DiscoverState
@@ -21,6 +24,7 @@ import JunZi.Pixiv.PreviewSwipeMode
 import JunZi.Pixiv.PuxivCustomPalette
 import JunZi.Pixiv.PuxivThemeMode
 import JunZi.Pixiv.PuxivThemePalette
+import JunZi.Pixiv.SearchKind
 import JunZi.Pixiv.UgoiraSaveFormat
 import JunZi.Pixiv.PuxivUiState
 import JunZi.Pixiv.SelectedBookmarkState
@@ -33,6 +37,8 @@ import JunZi.Pixiv.data.model.IllustImagePage
 import JunZi.Pixiv.data.model.UserPreview
 import JunZi.Pixiv.ui.theme.PuxivTheme
 import JunZi.Pixiv.ui.theme.puxivColorScheme
+import JunZi.Pixiv.data.model.HomeCategory
+import JunZi.Pixiv.data.model.NovelDetail
 import JunZi.Pixiv.data.model.RankingMode
 import JunZi.Pixiv.data.model.SearchSort
 import JunZi.Pixiv.data.model.SearchTarget
@@ -102,8 +108,10 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items as lazyRowItems
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -128,6 +136,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Login
 import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.automirrored.filled.NavigateBefore
 import androidx.compose.material.icons.automirrored.filled.NavigateNext
 import androidx.compose.material.icons.filled.AccountCircle
@@ -170,17 +179,20 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -199,6 +211,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -218,8 +231,16 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withLink
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -274,6 +295,13 @@ private enum class MyTab(val label: String) {
     Upload("投稿"),
 }
 
+private enum class DownloadKind {
+    Illust,
+    Novel,
+}
+
+private val LocalSeriesOpener = staticCompositionLocalOf<((Illust) -> Unit)?> { null }
+
 @Composable
 fun PuxivApp(viewModel: PixivViewModel) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -287,6 +315,8 @@ fun PuxivApp(viewModel: PixivViewModel) {
         AppScreen.WebPixiv,
         AppScreen.Preview,
         AppScreen.Author,
+        AppScreen.NovelReader,
+        AppScreen.Series,
     )
 
     PuxivTheme(
@@ -315,6 +345,16 @@ fun PuxivApp(viewModel: PixivViewModel) {
             modifier = Modifier.fillMaxSize(),
             color = MaterialTheme.colorScheme.background,
         ) {
+            val seriesOpener: (Illust) -> Unit = { illust ->
+                val sid = illust.seriesId ?: 0L
+                if (sid > 0L && !illust.type.equals("novel", ignoreCase = true)) {
+                    viewModel.openSeries(
+                        seriesId = sid,
+                        initialTitle = illust.seriesTitle.orEmpty(),
+                    )
+                }
+            }
+            CompositionLocalProvider(LocalSeriesOpener provides seriesOpener) {
             Box(Modifier.fillMaxSize()) {
                 if (showMainShell) {
                     MainShell(
@@ -323,12 +363,14 @@ fun PuxivApp(viewModel: PixivViewModel) {
                         keyword = state.keyword,
                         isBusy = state.isBusy,
                         rankingMode = state.rankingMode,
+                        searchKind = state.searchKind,
                         searchTarget = state.searchTarget,
                         searchSort = state.searchSort,
                         isTrendingLoading = state.isTrendingLoading,
                         trendingTags = state.trendingTags,
                         discover = state.discover,
                         items = state.items,
+                        searchUsers = state.searchUsers,
                         isSearchActive = state.isSearchActive,
                         isLoadingMore = state.isLoadingMore,
                         nextUrl = state.nextUrl,
@@ -429,6 +471,30 @@ fun PuxivApp(viewModel: PixivViewModel) {
                                 )
                             }
 
+                            AppScreen.NovelReader -> NovelReaderScreen(
+                                illust = state.selectedIllust,
+                                readerState = state.novelReader,
+                                comments = state.comments,
+                                onBack = viewModel::closeNovelReader,
+                                onReload = {
+                                    state.selectedIllust?.id?.let { viewModel.loadNovelReader(it) }
+                                },
+                                onDownload = viewModel::downloadSelectedNovel,
+                                onToggleBookmark = viewModel::toggleNovelBookmark,
+                                onOpenAuthor = viewModel::openAuthor,
+                                onTagClick = viewModel::searchTag,
+                                onCommentInputChange = viewModel::updateCommentInput,
+                                onSendComment = viewModel::sendComment,
+                            )
+
+                            AppScreen.Series -> SeriesScreen(
+                                state = state.series,
+                                onBack = viewModel::goBack,
+                                onOpenPreview = viewModel::openPreview,
+                                onLoadMore = viewModel::loadMoreSeries,
+                                onRetry = { viewModel.loadSeries(refresh = true) },
+                            )
+
                             else -> Unit
                         }
                     }
@@ -441,6 +507,7 @@ fun PuxivApp(viewModel: PixivViewModel) {
                         .navigationBarsPadding(),
                 )
             }
+            }
         }
     }
 }
@@ -452,12 +519,14 @@ private fun MainShell(
     keyword: String,
     isBusy: Boolean,
     rankingMode: RankingMode,
+    searchKind: SearchKind,
     searchTarget: SearchTarget,
     searchSort: SearchSort,
     isTrendingLoading: Boolean,
     trendingTags: List<TrendingTag>,
     discover: DiscoverState,
     items: List<Illust>,
+    searchUsers: List<UserPreview>,
     isSearchActive: Boolean,
     isLoadingMore: Boolean,
     nextUrl: String?,
@@ -564,25 +633,27 @@ private fun MainShell(
                         home = home,
                         keyword = keyword,
                         isBusy = isBusy,
-                        rankingMode = rankingMode,
                         contentPadding = padding,
                         onKeywordChange = viewModel::updateKeyword,
                         onSubmitSearch = viewModel::submitHomeSearch,
                         onLoadHome = { viewModel.loadHome(refresh = true) },
-                        onLoadFeed = viewModel::loadHomeFeed,
+                        onLoadFeed = { feed, refresh -> viewModel.loadHomeFeed(feed, refresh) },
                         onRankingModeChange = viewModel::updateRankingMode,
+                        onSelectCategory = viewModel::selectHomeCategory,
                         onOpenPreview = viewModel::openPreview,
                     )
 
                     AppScreen.Search -> SearchScreen(
                         keyword = keyword,
                         isBusy = isBusy,
+                        searchKind = searchKind,
                         searchTarget = searchTarget,
                         searchSort = searchSort,
                         isTrendingLoading = isTrendingLoading,
                         trendingTags = trendingTags,
                         discover = discover,
                         items = items,
+                        searchUsers = searchUsers,
                         isSearchActive = isSearchActive,
                         isLoadingMore = isLoadingMore,
                         nextUrl = nextUrl,
@@ -590,11 +661,13 @@ private fun MainShell(
                         onKeywordChange = viewModel::updateKeyword,
                         onSearch = viewModel::search,
                         onLoadMore = viewModel::loadMore,
+                        onSearchKindChange = viewModel::updateSearchKind,
                         onSearchSortChange = viewModel::updateSearchSort,
                         onSearchTargetChange = viewModel::updateSearchTarget,
                         onTrendingTagClick = viewModel::searchTrendingTag,
                         onReturnToDiscover = viewModel::returnToDiscover,
                         onOpenPreview = viewModel::openPreview,
+                        onOpenAuthor = viewModel::openAuthor,
                         onRefreshDiscover = { viewModel.loadDiscover(refresh = true) },
                         onLoadMoreDiscover = viewModel::loadDiscoverFeed,
                     )
@@ -609,10 +682,12 @@ private fun MainShell(
                         onLoadMine = { viewModel.loadMine(refresh = true) },
                         onLoadWorks = { viewModel.loadMyWorks(refresh = true) },
                         onLoadBookmarks = { feed, tag -> viewModel.loadMyBookmarks(feed, tag, refresh = true) },
+                        onLoadBookmarkNovels = { feed, tag -> viewModel.loadMyBookmarkNovels(feed, tag, refresh = true) },
                         onLoadBookmarkTags = { viewModel.loadMyBookmarkTags(refresh = true) },
                         onLoadHistory = { viewModel.loadHistory(refresh = true) },
                         onLoadMoreWorks = { viewModel.loadMyWorks(refresh = false) },
                         onLoadMoreBookmarks = { feed, tag -> viewModel.loadMyBookmarks(feed, tag, refresh = false) },
+                        onLoadMoreBookmarkNovels = { feed, tag -> viewModel.loadMyBookmarkNovels(feed, tag, refresh = false) },
                         onLoadMoreHistory = viewModel::loadMoreHistory,
                         onLoadFollowing = { viewModel.loadMyFollowing(it, refresh = true) },
                         onLoadMoreFollowing = { viewModel.loadMyFollowing(it, refresh = false) },
@@ -622,6 +697,7 @@ private fun MainShell(
                         onOpenPreview = viewModel::openPreview,
                         onOpenAuthor = viewModel::openAuthor,
                         onUploadIllust = viewModel::uploadIllust,
+                        onUploadNovel = viewModel::uploadNovel,
                         onOpenDownloadPreview = viewModel::openDownloadedPreview,
                         onOpenSettings = viewModel::openSettings,
                         onLogout = viewModel::logout,
@@ -707,24 +783,28 @@ private fun HomeScreen(
     home: JunZi.Pixiv.HomeState,
     keyword: String,
     isBusy: Boolean,
-    rankingMode: RankingMode,
     contentPadding: PaddingValues,
     onKeywordChange: (String) -> Unit,
     onSubmitSearch: () -> Unit,
     onLoadHome: () -> Unit,
     onLoadFeed: (HomeFeed, Boolean) -> Unit,
     onRankingModeChange: (RankingMode) -> Unit,
+    onSelectCategory: (HomeCategory) -> Unit,
     onOpenPreview: (Illust) -> Unit,
 ) {
-    val recommendedItems = home.recommended.items
-    val rankingItems = home.ranking.items
-    val latestItems = home.latest.items
     val isAnonymous = session == null
-    val primaryFeed = if (isAnonymous) home.walkthrough else home.recommended
+    val category = home.category
+    val categoryState = when (category) {
+        HomeCategory.Illust -> home.illust
+        HomeCategory.Manga -> home.manga
+        HomeCategory.Novel -> home.novel
+    }
+    val rankingMode = categoryState.rankingMode
+    val primaryFeed = if (isAnonymous) home.walkthrough else categoryState.recommended
     val visibleItems = if (isAnonymous) {
         home.walkthrough.items
     } else {
-        recommendedItems + rankingItems + latestItems
+        categoryState.recommended.items + categoryState.ranking.items + categoryState.latest.items
     }
     val gridState = rememberLazyStaggeredGridState()
     val coroutineScope = rememberCoroutineScope()
@@ -746,8 +826,17 @@ private fun HomeScreen(
                 .toList()
         }
     }
-    val recommendedHeaderIndex = 2 + if (homeTrendTags.isNotEmpty()) 1 else 0
-    val rankingModesIndex = recommendedHeaderIndex + homeFeedSectionItemCount(home.recommended)
+    val tabOptions = listOf(
+        HomeCategory.Illust to "插画",
+        HomeCategory.Manga to "漫画",
+        HomeCategory.Novel to "小说",
+    )
+    val selectedTabIndex = tabOptions.indexOfFirst { it.first == category }.takeIf { it >= 0 } ?: 0
+    val baseHeaderCount = (if (!isAnonymous) 2 else 0) +
+        (if (!isAnonymous) 1 else 0) +
+        (if (!isAnonymous && homeTrendTags.isNotEmpty()) 1 else 0)
+    val recommendedHeaderIndex = baseHeaderCount
+    val rankingModesIndex = recommendedHeaderIndex + homeFeedSectionItemCount(primaryFeed)
     val rankingHeaderIndex = rankingModesIndex + 1
 
     Scaffold(
@@ -778,12 +867,26 @@ private fun HomeScreen(
         },
         contentWindowInsets = WindowInsets.safeDrawing,
     ) { padding ->
-        Box(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
                 .feedSemanticsBoundary(decorativeFeedSemantics),
         ) {
+            if (!isAnonymous) {
+                PrimaryTabRow(
+                    selectedTabIndex = selectedTabIndex,
+                    containerColor = MaterialTheme.colorScheme.surface,
+                ) {
+                    tabOptions.forEachIndexed { index, (cat, label) ->
+                        Tab(
+                            selected = selectedTabIndex == index,
+                            onClick = { onSelectCategory(cat) },
+                            text = { Text(label) },
+                        )
+                    }
+                }
+            }
             LazyVerticalStaggeredGrid(
                 columns = StaggeredGridCells.Adaptive(150.dp),
                 state = gridState,
@@ -842,29 +945,38 @@ private fun HomeScreen(
                         )
                     }
                 }
+                val recommendedTitle = when {
+                    isAnonymous -> "浏览"
+                    category == HomeCategory.Novel -> "小说推荐"
+                    category == HomeCategory.Manga -> "漫画推荐"
+                    else -> "推荐"
+                }
                 homeFeedSection(
-                    title = if (isAnonymous) "浏览" else "推荐",
+                    title = recommendedTitle,
                     feed = if (isAnonymous) HomeFeed.Walkthrough else HomeFeed.Recommended,
                     feedState = primaryFeed,
+                    keyPrefix = category.name,
                     clearItemSemantics = decorativeFeedSemantics,
                     onLoadFeed = onLoadFeed,
                     onOpenPreview = onOpenPreview,
                 )
                 if (!isAnonymous) {
                     item(
-                        key = "home-ranking-modes",
+                        key = "home-ranking-modes-${category.name}",
                         contentType = "home-ranking-modes",
                         span = StaggeredGridItemSpan.FullLine,
                     ) {
                         RankingModeChips(
                             selected = rankingMode,
+                            category = category,
                             onSelect = onRankingModeChange,
                         )
                     }
                     homeFeedSection(
                         title = "排行 · ${rankingMode.label}",
                         feed = HomeFeed.Ranking,
-                        feedState = home.ranking,
+                        feedState = categoryState.ranking,
+                        keyPrefix = category.name,
                         clearItemSemantics = decorativeFeedSemantics,
                         onLoadFeed = onLoadFeed,
                         onOpenPreview = onOpenPreview,
@@ -872,7 +984,8 @@ private fun HomeScreen(
                     homeFeedSection(
                         title = "最新",
                         feed = HomeFeed.Latest,
-                        feedState = home.latest,
+                        feedState = categoryState.latest,
+                        keyPrefix = category.name,
                         clearItemSemantics = decorativeFeedSemantics,
                         onLoadFeed = onLoadFeed,
                         onOpenPreview = onOpenPreview,
@@ -1134,6 +1247,7 @@ private fun FeaturedIllustCard(
     illust: Illust,
     onClick: () -> Unit,
 ) {
+    val seriesOpener = LocalSeriesOpener.current
     ElevatedCard(
         onClick = onClick,
         modifier = Modifier.width(132.dp),
@@ -1158,8 +1272,11 @@ private fun FeaturedIllustCard(
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 OverlayChip(illust.typeLabel)
-                if (illust.pageCount > 1) {
+                if (illust.pageCount > 1 && !illust.type.equals("novel", ignoreCase = true)) {
                     OverlayChip("${illust.pageCount}P")
+                }
+                if (illust.seriesId != null && seriesOpener != null && !illust.type.equals("novel", ignoreCase = true)) {
+                    SeriesBadge(onClick = { seriesOpener(illust) })
                 }
             }
             Column(
@@ -1192,6 +1309,7 @@ private fun FeaturedIllustCard(
 @Composable
 private fun RankingModeChips(
     selected: RankingMode,
+    category: HomeCategory,
     onSelect: (RankingMode) -> Unit,
 ) {
     Surface(
@@ -1213,7 +1331,7 @@ private fun RankingModeChips(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                RankingMode.values().forEach { mode ->
+                RankingMode.values().filter { it.category == category }.forEach { mode ->
                     FilterChip(
                         selected = selected == mode,
                         onClick = { onSelect(mode) },
@@ -1239,6 +1357,68 @@ private fun OverlayChip(text: String) {
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.SemiBold,
         )
+    }
+}
+
+@Composable
+private fun SeriesBadge(onClick: () -> Unit) {
+    Surface(
+        modifier = Modifier.clickable(onClick = onClick),
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.86f),
+        contentColor = MaterialTheme.colorScheme.onPrimary,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
+        ) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.MenuBook,
+                contentDescription = "查看系列",
+                modifier = Modifier.size(12.dp),
+            )
+            Text(
+                text = "系列",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+    }
+}
+
+@Composable
+private fun NovelTagOverlay(
+    tags: List<String>,
+    modifier: Modifier = Modifier,
+) {
+    val display = tags.asSequence()
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
+        .take(3)
+        .toList()
+    if (display.isEmpty()) return
+    FlowRow(
+        modifier = modifier.widthIn(max = 120.dp),
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        display.forEach { tag ->
+            Surface(
+                modifier = Modifier.clearAndSetSemantics {},
+                shape = RoundedCornerShape(6.dp),
+                color = MaterialTheme.colorScheme.scrim.copy(alpha = 0.6f),
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+            ) {
+                Text(
+                    text = "#$tag",
+                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
     }
 }
 
@@ -1386,9 +1566,11 @@ private fun LazyStaggeredGridScope.homeFeedSection(
     clearItemSemantics: Boolean,
     onLoadFeed: (HomeFeed, Boolean) -> Unit,
     onOpenPreview: (Illust) -> Unit,
+    keyPrefix: String = "",
 ) {
+    val sectionKey = if (keyPrefix.isEmpty()) feed.name else "$keyPrefix-${feed.name}"
     item(
-        key = "${feed.name}-header",
+        key = "$sectionKey-header",
         contentType = "section-header",
         span = StaggeredGridItemSpan.FullLine,
     ) {
@@ -1401,7 +1583,7 @@ private fun LazyStaggeredGridScope.homeFeedSection(
     }
     if (feedState.error != null) {
         item(
-            key = "${feed.name}-error",
+            key = "$sectionKey-error",
             contentType = "feed-error",
             span = StaggeredGridItemSpan.FullLine,
         ) {
@@ -1423,7 +1605,7 @@ private fun LazyStaggeredGridScope.homeFeedSection(
     }
     if (feedState.items.isEmpty() && feedState.isLoading) {
         item(
-            key = "${feed.name}-loading",
+            key = "$sectionKey-loading",
             contentType = "feed-loading",
             span = StaggeredGridItemSpan.FullLine,
         ) {
@@ -1439,7 +1621,7 @@ private fun LazyStaggeredGridScope.homeFeedSection(
     }
     items(
         feedState.items,
-        key = { "${feed.name}-${it.id}" },
+        key = { "$sectionKey-${it.id}" },
         contentType = { "illust-card" },
     ) { illust ->
         IllustCard(
@@ -1449,7 +1631,7 @@ private fun LazyStaggeredGridScope.homeFeedSection(
         )
     }
     item(
-        key = "${feed.name}-footer",
+        key = "$sectionKey-footer",
         contentType = "feed-footer",
         span = StaggeredGridItemSpan.FullLine,
     ) {
@@ -1731,19 +1913,22 @@ private fun MeScreen(
     onLoadMine: () -> Unit,
     onLoadWorks: () -> Unit,
     onLoadBookmarks: (BookmarkFeed, String?) -> Unit,
+    onLoadBookmarkNovels: (BookmarkFeed, String?) -> Unit,
     onLoadBookmarkTags: () -> Unit,
     onLoadHistory: () -> Unit,
     onLoadMoreWorks: () -> Unit,
     onLoadMoreBookmarks: (BookmarkFeed, String?) -> Unit,
+    onLoadMoreBookmarkNovels: (BookmarkFeed, String?) -> Unit,
     onLoadMoreHistory: () -> Unit,
     onLoadFollowing: (FollowUserFeed) -> Unit,
     onLoadMoreFollowing: (FollowUserFeed) -> Unit,
     onClearHistory: () -> Unit,
-    onDeleteHistory: (Long) -> Unit,
+    onDeleteHistory: (Illust) -> Unit,
     onDeleteDownload: (String) -> Unit,
     onOpenPreview: (Illust) -> Unit,
     onOpenAuthor: (UserPreview) -> Unit,
     onUploadIllust: (String, String, List<String>, String, Int, String, Boolean, Int, List<Uri>) -> Unit,
+    onUploadNovel: (String, String, String, List<String>, Int, String, Boolean, Int, Boolean, Uri?) -> Unit,
     onOpenDownloadPreview: (DownloadItem) -> Unit,
     onOpenSettings: () -> Unit,
     onLogout: () -> Unit,
@@ -1752,6 +1937,7 @@ private fun MeScreen(
 ) {
     var selectedTab by remember { mutableStateOf(MyTab.Works) }
     var selectedBookmarkFeed by remember { mutableStateOf(BookmarkFeed.Public) }
+    var selectedBookmarkKind by remember { mutableStateOf(BookmarkKind.Illust) }
     var selectedBookmarkTag by remember { mutableStateOf<String?>(null) }
     var selectedFollowingFeed by remember { mutableStateOf(FollowUserFeed.Public) }
     var showLoginDialog by remember { mutableStateOf(false) }
@@ -1771,7 +1957,7 @@ private fun MeScreen(
         val selectedTag = selectedBookmarkTag
         if (selectedTag != null && visibleBookmarkTags.none { it.equals(selectedTag, ignoreCase = true) }) {
             selectedBookmarkTag = null
-            if (selectedTab == MyTab.Bookmarks && session != null) {
+            if (selectedTab == MyTab.Bookmarks && session != null && selectedBookmarkKind == BookmarkKind.Illust) {
                 onLoadBookmarks(selectedBookmarkFeed, null)
             }
         }
@@ -1847,9 +2033,19 @@ private fun MeScreen(
                                 ) {
                                     onLoadBookmarkTags()
                                 }
-                                val feed = mine.bookmarkFeed(selectedBookmarkFeed)
-                                if (feed.items.isEmpty() || feed.queryTag != selectedBookmarkTag) {
-                                    onLoadBookmarks(selectedBookmarkFeed, selectedBookmarkTag)
+                                when (selectedBookmarkKind) {
+                                    BookmarkKind.Illust -> {
+                                        val feed = mine.bookmarkFeed(selectedBookmarkFeed)
+                                        if (feed.items.isEmpty() || feed.queryTag != selectedBookmarkTag) {
+                                            onLoadBookmarks(selectedBookmarkFeed, selectedBookmarkTag)
+                                        }
+                                    }
+                                    BookmarkKind.Novel -> {
+                                        val feed = mine.bookmarkNovelsFeed(selectedBookmarkFeed)
+                                        if (feed.items.isEmpty()) {
+                                            onLoadBookmarkNovels(selectedBookmarkFeed, null)
+                                        }
+                                    }
                                 }
                             }
                             MyTab.History -> if (history.items.isEmpty()) onLoadHistory()
@@ -1890,6 +2086,7 @@ private fun MeScreen(
                         BookmarkCollectionPanel(
                             mine = mine,
                             selectedFeed = selectedBookmarkFeed,
+                            selectedKind = selectedBookmarkKind,
                             selectedTag = selectedBookmarkTag,
                             onSelectFeed = { feed ->
                                 selectedBookmarkFeed = feed
@@ -1899,7 +2096,27 @@ private fun MeScreen(
                                 ) {
                                     onLoadBookmarkTags()
                                 }
-                                onLoadBookmarks(feed, selectedBookmarkTag)
+                                when (selectedBookmarkKind) {
+                                    BookmarkKind.Illust -> onLoadBookmarks(feed, selectedBookmarkTag)
+                                    BookmarkKind.Novel -> onLoadBookmarkNovels(feed, null)
+                                }
+                            },
+                            onSelectKind = { kind ->
+                                selectedBookmarkKind = kind
+                                when (kind) {
+                                    BookmarkKind.Illust -> {
+                                        val feed = mine.bookmarkFeed(selectedBookmarkFeed)
+                                        if (feed.items.isEmpty() || feed.queryTag != selectedBookmarkTag) {
+                                            onLoadBookmarks(selectedBookmarkFeed, selectedBookmarkTag)
+                                        }
+                                    }
+                                    BookmarkKind.Novel -> {
+                                        val feed = mine.bookmarkNovelsFeed(selectedBookmarkFeed)
+                                        if (feed.items.isEmpty()) {
+                                            onLoadBookmarkNovels(selectedBookmarkFeed, null)
+                                        }
+                                    }
+                                }
                             },
                             onSelectTag = { tag ->
                                 selectedBookmarkTag = tag
@@ -1908,31 +2125,63 @@ private fun MeScreen(
                             onRefreshTags = onLoadBookmarkTags,
                         )
                     }
-                    val feed = mine.bookmarkFeed(selectedBookmarkFeed)
-                    mineFeedMessages(
-                        feed = feed,
-                        emptyText = if (selectedBookmarkFeed == BookmarkFeed.Private) {
-                            "还没有私密收藏"
-                        } else {
-                            "还没有收藏作品"
-                        },
-                    )
-                    items(
-                        feed.items,
-                        key = { "mine-bookmark-${selectedBookmarkFeed.name}-${selectedBookmarkTag.orEmpty()}-${it.id}" },
-                        contentType = { "illust-card" },
-                    ) { illust ->
-                        IllustCard(
-                            illust = illust,
-                            clearSemantics = false,
-                            onClick = onOpenPreview,
-                        )
-                    }
-                    item(span = StaggeredGridItemSpan.FullLine) {
-                        MinePagingFooter(
-                            feed = feed,
-                            onLoadMore = { onLoadMoreBookmarks(selectedBookmarkFeed, selectedBookmarkTag) },
-                        )
+                    when (selectedBookmarkKind) {
+                        BookmarkKind.Illust -> {
+                            val feed = mine.bookmarkFeed(selectedBookmarkFeed)
+                            mineFeedMessages(
+                                feed = feed,
+                                emptyText = if (selectedBookmarkFeed == BookmarkFeed.Private) {
+                                    "还没有私密收藏"
+                                } else {
+                                    "还没有收藏作品"
+                                },
+                            )
+                            items(
+                                feed.items,
+                                key = { "mine-bookmark-${selectedBookmarkFeed.name}-${selectedBookmarkTag.orEmpty()}-${it.id}" },
+                                contentType = { "illust-card" },
+                            ) { illust ->
+                                IllustCard(
+                                    illust = illust,
+                                    clearSemantics = false,
+                                    onClick = onOpenPreview,
+                                )
+                            }
+                            item(span = StaggeredGridItemSpan.FullLine) {
+                                MinePagingFooter(
+                                    feed = feed,
+                                    onLoadMore = { onLoadMoreBookmarks(selectedBookmarkFeed, selectedBookmarkTag) },
+                                )
+                            }
+                        }
+                        BookmarkKind.Novel -> {
+                            val feed = mine.bookmarkNovelsFeed(selectedBookmarkFeed)
+                            mineFeedMessages(
+                                feed = feed,
+                                emptyText = if (selectedBookmarkFeed == BookmarkFeed.Private) {
+                                    "还没有私密收藏的小说"
+                                } else {
+                                    "还没有收藏的小说"
+                                },
+                            )
+                            items(
+                                feed.items,
+                                key = { "mine-bookmark-novel-${selectedBookmarkFeed.name}-${it.id}" },
+                                contentType = { "illust-card" },
+                            ) { illust ->
+                                IllustCard(
+                                    illust = illust,
+                                    clearSemantics = false,
+                                    onClick = onOpenPreview,
+                                )
+                            }
+                            item(span = StaggeredGridItemSpan.FullLine) {
+                                MinePagingFooter(
+                                    feed = feed,
+                                    onLoadMore = { onLoadMoreBookmarkNovels(selectedBookmarkFeed, null) },
+                                )
+                            }
+                        }
                     }
                 }
 
@@ -1942,6 +2191,7 @@ private fun MeScreen(
                             isUploading = mine.isUploading,
                             uploadStatus = mine.uploadStatus,
                             onUploadIllust = onUploadIllust,
+                            onUploadNovel = onUploadNovel,
                         )
                     }
                 }
@@ -2090,7 +2340,7 @@ private fun MeScreen(
                     confirmButton = {
                         TextButton(
                             onClick = {
-                                onDeleteHistory(entry.illust.id)
+                                onDeleteHistory(entry.illust)
                                 pendingDeleteHistory = null
                             },
                         ) {
@@ -2341,12 +2591,17 @@ private fun MyTabRow(
 private fun BookmarkCollectionPanel(
     mine: MyState,
     selectedFeed: BookmarkFeed,
+    selectedKind: BookmarkKind,
     selectedTag: String?,
     onSelectFeed: (BookmarkFeed) -> Unit,
+    onSelectKind: (BookmarkKind) -> Unit,
     onSelectTag: (String?) -> Unit,
     onRefreshTags: () -> Unit,
 ) {
-    val currentFeed = mine.bookmarkFeed(selectedFeed)
+    val currentFeed = when (selectedKind) {
+        BookmarkKind.Illust -> mine.bookmarkFeed(selectedFeed)
+        BookmarkKind.Novel -> mine.bookmarkNovelsFeed(selectedFeed)
+    }
     val accountTags = mine.bookmarkTags(selectedFeed)
     val filterTags = accountTags.map { it.name }
         .distinctBy { it.lowercase() }
@@ -2377,7 +2632,10 @@ private fun BookmarkCollectionPanel(
                         fontWeight = FontWeight.Bold,
                     )
                     Text(
-                        text = selectedTag?.let { "#$it" } ?: "全部标签",
+                        text = when (selectedKind) {
+                            BookmarkKind.Illust -> selectedTag?.let { "#$it" } ?: "全部标签"
+                            BookmarkKind.Novel -> "小说收藏"
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -2410,43 +2668,60 @@ private fun BookmarkCollectionPanel(
                     )
                 }
             }
-            LazyRow(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(34.dp),
+            FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
-                contentPadding = PaddingValues(end = 2.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                item(key = "all-bookmark-tags") {
-                    BookmarkTagChip(
-                        tag = "全部标签",
-                        isAll = true,
-                        isAccountTag = true,
-                        selected = selectedTag == null,
-                        onClick = { onSelectTag(null) },
-                        onRemove = null,
-                    )
-                }
-                lazyRowItems(filterTags, key = { it }) { tag ->
-                    BookmarkTagChip(
-                        tag = tag,
-                        isAll = false,
-                        isAccountTag = true,
-                        selected = selectedTag?.equals(tag, ignoreCase = true) == true,
-                        onClick = { onSelectTag(tag) },
-                        onRemove = null,
-                    )
-                }
-            }
-            mine.bookmarkTagsError?.takeIf { it.isNotBlank() }?.let { error ->
-                Text(
-                    text = "账号标签加载失败：$error",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
+                FilterChip(
+                    selected = selectedKind == BookmarkKind.Illust,
+                    onClick = { onSelectKind(BookmarkKind.Illust) },
+                    label = { Text("作品") },
                 )
+                FilterChip(
+                    selected = selectedKind == BookmarkKind.Novel,
+                    onClick = { onSelectKind(BookmarkKind.Novel) },
+                    label = { Text("小说") },
+                )
+            }
+            if (selectedKind == BookmarkKind.Illust) {
+                LazyRow(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(34.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    contentPadding = PaddingValues(end = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    item(key = "all-bookmark-tags") {
+                        BookmarkTagChip(
+                            tag = "全部标签",
+                            isAll = true,
+                            isAccountTag = true,
+                            selected = selectedTag == null,
+                            onClick = { onSelectTag(null) },
+                            onRemove = null,
+                        )
+                    }
+                    lazyRowItems(filterTags, key = { it }) { tag ->
+                        BookmarkTagChip(
+                            tag = tag,
+                            isAll = false,
+                            isAccountTag = true,
+                            selected = selectedTag?.equals(tag, ignoreCase = true) == true,
+                            onClick = { onSelectTag(tag) },
+                            onRemove = null,
+                        )
+                    }
+                }
+                mine.bookmarkTagsError?.takeIf { it.isNotBlank() }?.let { error ->
+                    Text(
+                        text = "账号标签加载失败：$error",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
     }
@@ -2729,6 +3004,18 @@ private fun DownloadsPanel(
     onOpenPreview: (DownloadItem) -> Unit,
     onDelete: (DownloadItem) -> Unit,
 ) {
+    var selectedKind by remember { mutableStateOf(DownloadKind.Illust) }
+    val visibleDownloads = remember(downloads, selectedKind) {
+        downloads.filter { item ->
+            val isNovel = item.illust?.type.equals("novel", ignoreCase = true)
+            when (selectedKind) {
+                DownloadKind.Illust -> !isNovel
+                DownloadKind.Novel -> isNovel
+            }
+        }
+    }
+    val novelCount = downloads.count { it.illust?.type.equals("novel", ignoreCase = true) }
+    val illustCount = downloads.size - novelCount
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(8.dp),
@@ -2744,7 +3031,7 @@ private fun DownloadsPanel(
                 Column(Modifier.weight(1f)) {
                     Text("下载内容", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Text(
-                        text = "点击条目可用本地预览查看作品",
+                        text = "作品可本地预览，小说保存为文本文件",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -2754,12 +3041,31 @@ private fun DownloadsPanel(
                     CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
                 }
             }
-            if (downloads.isEmpty()) {
-                EmptyStateCard("还没有下载内容", Modifier.fillMaxWidth())
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                FilterChip(
+                    selected = selectedKind == DownloadKind.Illust,
+                    onClick = { selectedKind = DownloadKind.Illust },
+                    label = { Text("作品 $illustCount") },
+                )
+                FilterChip(
+                    selected = selectedKind == DownloadKind.Novel,
+                    onClick = { selectedKind = DownloadKind.Novel },
+                    label = { Text("小说 $novelCount") },
+                )
+            }
+            if (visibleDownloads.isEmpty()) {
+                EmptyStateCard(
+                    if (selectedKind == DownloadKind.Novel) "还没有下载小说" else "还没有下载作品",
+                    Modifier.fillMaxWidth(),
+                )
             } else {
-                downloads.forEach { item ->
+                visibleDownloads.forEach { item ->
+                    val isNovel = item.illust?.type.equals("novel", ignoreCase = true)
                     val savedUris = item.localSavedUris()
-                    val canOpen = item.status == DownloadStatus.Finished && savedUris.any { it.isNotBlank() }
+                    val canOpen = !isNovel && item.status == DownloadStatus.Finished && savedUris.any { it.isNotBlank() }
                     val previewUrl = savedUris.firstOrNull { it.isNotBlank() } ?: item.illust?.previewUrl
                     Surface(
                         modifier = Modifier
@@ -2787,7 +3093,7 @@ private fun DownloadsPanel(
                                     .background(MaterialTheme.colorScheme.surface),
                                 contentAlignment = Alignment.Center,
                             ) {
-                                if (!previewUrl.isNullOrBlank()) {
+                                if (!isNovel && !previewUrl.isNullOrBlank()) {
                                     GlideImage(
                                         url = previewUrl,
                                         modifier = Modifier.matchParentSize(),
@@ -2798,7 +3104,7 @@ private fun DownloadsPanel(
                                 } else {
                                     Icon(
                                         imageVector = when (item.status) {
-                                            DownloadStatus.Finished -> Icons.Default.Save
+                                            DownloadStatus.Finished -> if (isNovel) Icons.AutoMirrored.Filled.MenuBook else Icons.Default.Save
                                             DownloadStatus.Failed -> Icons.Default.Refresh
                                             else -> Icons.Default.Download
                                         },
@@ -2819,7 +3125,7 @@ private fun DownloadsPanel(
                                 ) {
                                     Icon(
                                         imageVector = when (item.status) {
-                                            DownloadStatus.Finished -> Icons.Default.Save
+                                            DownloadStatus.Finished -> if (isNovel) Icons.AutoMirrored.Filled.MenuBook else Icons.Default.Save
                                             DownloadStatus.Failed -> Icons.Default.Refresh
                                             else -> Icons.Default.Download
                                         },
@@ -2842,6 +3148,7 @@ private fun DownloadsPanel(
                                 )
                                 Text(
                                     text = when {
+                                        isNovel -> "小说文本"
                                         item.isUgoira -> "动图 ${item.fileName.substringAfterLast('.', "WEBP").uppercase()}"
                                         item.pageCount > 1 -> "${item.pageCount} 张图片"
                                         else -> "单张图片"
@@ -2887,19 +3194,34 @@ private fun UploadIllustPanel(
     isUploading: Boolean,
     uploadStatus: String?,
     onUploadIllust: (String, String, List<String>, String, Int, String, Boolean, Int, List<Uri>) -> Unit,
+    onUploadNovel: (String, String, String, List<String>, Int, String, Boolean, Int, Boolean, Uri?) -> Unit,
 ) {
     var title by remember { mutableStateOf("") }
     var caption by remember { mutableStateOf("") }
     var tagsText by remember { mutableStateOf("") }
     var type by remember { mutableStateOf("illust") }
+    var novelText by remember { mutableStateOf("") }
     var visibilityScope by remember { mutableIntStateOf(1) }
     var xRestrict by remember { mutableStateOf("none") }
     var isSexual by remember { mutableStateOf(false) }
     var illustAiType by remember { mutableIntStateOf(1) }
+    var isOriginal by remember { mutableStateOf(true) }
     var selectedUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    var novelCover by remember { mutableStateOf<Uri?>(null) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
         selectedUris = uris.take(20)
     }
+    val coverPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        novelCover = uri
+    }
+
+    val typeOptions = listOf(
+        "illust" to "插画",
+        "manga" to "漫画",
+        "novel" to "小说",
+    )
+    val selectedTypeIndex = typeOptions.indexOfFirst { it.first == type }.takeIf { it >= 0 } ?: 0
+    val isNovel = type == "novel"
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -2922,6 +3244,18 @@ private fun UploadIllustPanel(
                     )
                 }
             }
+            PrimaryTabRow(
+                selectedTabIndex = selectedTypeIndex,
+                containerColor = Color.Transparent,
+            ) {
+                typeOptions.forEachIndexed { index, (value, label) ->
+                    Tab(
+                        selected = selectedTypeIndex == index,
+                        onClick = { type = value },
+                        text = { Text(label) },
+                    )
+                }
+            }
             OutlinedTextField(
                 value = title,
                 onValueChange = { title = it },
@@ -2934,7 +3268,7 @@ private fun UploadIllustPanel(
                 value = caption,
                 onValueChange = { caption = it },
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("说明") },
+                label = { Text(if (isNovel) "简介" else "说明") },
                 minLines = 2,
                 shape = RoundedCornerShape(8.dp),
             )
@@ -2946,9 +3280,17 @@ private fun UploadIllustPanel(
                 singleLine = true,
                 shape = RoundedCornerShape(8.dp),
             )
+            if (isNovel) {
+                OutlinedTextField(
+                    value = novelText,
+                    onValueChange = { novelText = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("正文（支持 [newpage] 分章节）") },
+                    minLines = 8,
+                    shape = RoundedCornerShape(8.dp),
+                )
+            }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                FilterChip(selected = type == "illust", onClick = { type = "illust" }, label = { Text("插画") })
-                FilterChip(selected = type == "manga", onClick = { type = "manga" }, label = { Text("漫画") })
                 FilterChip(selected = visibilityScope == 1, onClick = { visibilityScope = 1 }, label = { Text("公开") })
                 FilterChip(selected = visibilityScope == 2, onClick = { visibilityScope = 2 }, label = { Text("好友") })
                 FilterChip(selected = visibilityScope == 3, onClick = { visibilityScope = 3 }, label = { Text("非公开") })
@@ -2959,36 +3301,84 @@ private fun UploadIllustPanel(
                 FilterChip(selected = xRestrict == "r18g", onClick = { xRestrict = "r18g" }, label = { Text("R18G") })
                 FilterChip(selected = isSexual, onClick = { isSexual = !isSexual }, label = { Text("性描写") })
                 FilterChip(selected = illustAiType == 2, onClick = { illustAiType = if (illustAiType == 2) 1 else 2 }, label = { Text("AI 辅助") })
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                FilledTonalButton(
-                    onClick = { picker.launch("image/*") },
-                    modifier = Modifier.weight(1f),
-                    enabled = !isUploading,
-                ) {
-                    Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text(if (selectedUris.isEmpty()) "选择图片" else "${selectedUris.size} 张图片")
+                if (isNovel) {
+                    FilterChip(selected = isOriginal, onClick = { isOriginal = !isOriginal }, label = { Text("原创") })
                 }
-                Button(
-                    onClick = {
-                        val tags = tagsText.split(Regex("""[\s,，]+"""))
-                        onUploadIllust(title, caption, tags, type, visibilityScope, xRestrict, isSexual, illustAiType, selectedUris)
-                    },
-                    enabled = !isUploading,
-                    modifier = Modifier.weight(1f),
+            }
+            if (isNovel) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    if (isUploading) {
-                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                    } else {
-                        Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
+                    FilledTonalButton(
+                        onClick = { coverPicker.launch("image/*") },
+                        modifier = Modifier.weight(1f),
+                        enabled = !isUploading,
+                    ) {
+                        Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(if (novelCover == null) "选择封面（可选）" else "已选择封面")
                     }
-                    Spacer(Modifier.width(8.dp))
-                    Text("提交")
+                    Button(
+                        onClick = {
+                            val tags = tagsText.split(Regex("""[\s,，]+"""))
+                            onUploadNovel(
+                                title,
+                                caption,
+                                novelText,
+                                tags,
+                                visibilityScope,
+                                xRestrict,
+                                isSexual,
+                                illustAiType,
+                                isOriginal,
+                                novelCover,
+                            )
+                        },
+                        enabled = !isUploading,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        if (isUploading) {
+                            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                        } else {
+                            Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Text("提交小说")
+                    }
+                }
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    FilledTonalButton(
+                        onClick = { picker.launch("image/*") },
+                        modifier = Modifier.weight(1f),
+                        enabled = !isUploading,
+                    ) {
+                        Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(if (selectedUris.isEmpty()) "选择图片" else "${selectedUris.size} 张图片")
+                    }
+                    Button(
+                        onClick = {
+                            val tags = tagsText.split(Regex("""[\s,，]+"""))
+                            onUploadIllust(title, caption, tags, type, visibilityScope, xRestrict, isSexual, illustAiType, selectedUris)
+                        },
+                        enabled = !isUploading,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        if (isUploading) {
+                            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                        } else {
+                            Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Text("提交")
+                    }
                 }
             }
             uploadStatus?.takeIf { it.isNotBlank() }?.let {
@@ -3952,12 +4342,14 @@ private fun openExternalUrl(context: Context, url: String) {
 private fun SearchScreen(
     keyword: String,
     isBusy: Boolean,
+    searchKind: SearchKind,
     searchTarget: SearchTarget,
     searchSort: SearchSort,
     isTrendingLoading: Boolean,
     trendingTags: List<TrendingTag>,
     discover: DiscoverState,
     items: List<Illust>,
+    searchUsers: List<UserPreview>,
     isSearchActive: Boolean,
     isLoadingMore: Boolean,
     nextUrl: String?,
@@ -3965,11 +4357,13 @@ private fun SearchScreen(
     onKeywordChange: (String) -> Unit,
     onSearch: () -> Unit,
     onLoadMore: () -> Unit,
+    onSearchKindChange: (SearchKind) -> Unit,
     onSearchSortChange: (SearchSort) -> Unit,
     onSearchTargetChange: (SearchTarget) -> Unit,
     onTrendingTagClick: (TrendingTag) -> Unit,
     onReturnToDiscover: () -> Unit,
     onOpenPreview: (Illust) -> Unit,
+    onOpenAuthor: (UserPreview) -> Unit,
     onRefreshDiscover: () -> Unit,
     onLoadMoreDiscover: (DiscoverFeed, Boolean) -> Unit,
 ) {
@@ -3978,7 +4372,8 @@ private fun SearchScreen(
     val resultGridState = rememberLazyStaggeredGridState()
     var selectedDiscoverFeed by remember { mutableStateOf(DiscoverFeed.Public) }
 
-    LaunchedEffect(isSearchActive, nextUrl, isLoadingMore, isBusy, items.size) {
+    val activeResultCount = if (searchKind == SearchKind.User) searchUsers.size else items.size
+    LaunchedEffect(isSearchActive, nextUrl, isLoadingMore, isBusy, activeResultCount, searchKind) {
         if (!isSearchActive) return@LaunchedEffect
         snapshotFlow {
             val layoutInfo = resultGridState.layoutInfo
@@ -4002,7 +4397,7 @@ private fun SearchScreen(
                         Text("发现")
                         Text(
                             text = if (isSearchActive) {
-                                "${items.size} 搜索结果"
+                                "$activeResultCount 搜索结果"
                             } else {
                                 "关注作品"
                             },
@@ -4036,12 +4431,14 @@ private fun SearchScreen(
                         SearchControlPanel(
                             keyword = keyword,
                             isBusy = isBusy,
+                            searchKind = searchKind,
                             searchTarget = searchTarget,
                             searchSort = searchSort,
                             isTrendingLoading = isTrendingLoading,
                             trendingTags = trendingTags,
                             onKeywordChange = onKeywordChange,
                             onSearch = onSearch,
+                            onSearchKindChange = onSearchKindChange,
                             onSearchSortChange = onSearchSortChange,
                             onSearchTargetChange = onSearchTargetChange,
                             onTrendingTagClick = onTrendingTagClick,
@@ -4082,12 +4479,14 @@ private fun SearchScreen(
                         SearchControlPanel(
                             keyword = keyword,
                             isBusy = isBusy,
+                            searchKind = searchKind,
                             searchTarget = searchTarget,
                             searchSort = searchSort,
                             isTrendingLoading = isTrendingLoading,
                             trendingTags = trendingTags,
                             onKeywordChange = onKeywordChange,
                             onSearch = onSearch,
+                            onSearchKindChange = onSearchKindChange,
                             onSearchSortChange = onSearchSortChange,
                             onSearchTargetChange = onSearchTargetChange,
                             onTrendingTagClick = onTrendingTagClick,
@@ -4095,14 +4494,33 @@ private fun SearchScreen(
                     }
                     item(span = StaggeredGridItemSpan.FullLine) {
                         SearchResultHeader(
-                            resultCount = items.size,
+                            resultCount = activeResultCount,
                             isBusy = isBusy,
                             onBack = onReturnToDiscover,
                         )
                     }
-                    if (items.isEmpty() && !isBusy) {
+                    if (activeResultCount == 0 && !isBusy) {
                         item(span = StaggeredGridItemSpan.FullLine) {
                             EmptySearch(Modifier.fillMaxWidth())
+                        }
+                    } else if (searchKind == SearchKind.User) {
+                        items(
+                            searchUsers,
+                            key = { "user-${it.userId}" },
+                            contentType = { "user-card" },
+                        ) { user ->
+                            FollowingUserCard(
+                                user = user,
+                                onClick = { onOpenAuthor(user) },
+                            )
+                        }
+                        item(span = StaggeredGridItemSpan.FullLine) {
+                            PagingFooter(
+                                isLoadingMore = isLoadingMore,
+                                nextUrl = nextUrl,
+                                hasItems = searchUsers.isNotEmpty(),
+                                onLoadMore = onLoadMore,
+                            )
                         }
                     } else {
                         items(
@@ -4135,12 +4553,14 @@ private fun SearchScreen(
 private fun SearchControlPanel(
     keyword: String,
     isBusy: Boolean,
+    searchKind: SearchKind,
     searchTarget: SearchTarget,
     searchSort: SearchSort,
     isTrendingLoading: Boolean,
     trendingTags: List<TrendingTag>,
     onKeywordChange: (String) -> Unit,
     onSearch: () -> Unit,
+    onSearchKindChange: (SearchKind) -> Unit,
     onSearchSortChange: (SearchSort) -> Unit,
     onSearchTargetChange: (SearchTarget) -> Unit,
     onTrendingTagClick: (TrendingTag) -> Unit,
@@ -4166,7 +4586,11 @@ private fun SearchControlPanel(
                     modifier = Modifier
                         .weight(1f)
                         .height(48.dp),
-                    placeholder = "标签、标题、作者",
+                    placeholder = when (searchKind) {
+                        SearchKind.Illust -> "搜索作品、标签、标题"
+                        SearchKind.Novel -> "搜索小说、标签、标题"
+                        SearchKind.User -> "搜索作者名或账号"
+                    },
                     onSearch = onSearch,
                 )
                 IconButton(
@@ -4197,25 +4621,40 @@ private fun SearchControlPanel(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                SearchTarget.values().forEach { target ->
+                SearchKind.entries.forEach { kind ->
                     FilterChip(
-                        selected = searchTarget == target,
-                        onClick = { onSearchTargetChange(target) },
-                        label = { Text(target.label) },
+                        selected = searchKind == kind,
+                        onClick = { onSearchKindChange(kind) },
+                        label = { Text(kind.label) },
                     )
                 }
             }
 
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                SearchSort.entries.forEach { sort ->
-                    FilterChip(
-                        selected = searchSort == sort,
-                        onClick = { onSearchSortChange(sort) },
-                        label = { Text(sort.label) },
-                    )
+            if (searchKind != SearchKind.User) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    SearchTarget.values().forEach { target ->
+                        FilterChip(
+                            selected = searchTarget == target,
+                            onClick = { onSearchTargetChange(target) },
+                            label = { Text(target.label) },
+                        )
+                    }
+                }
+
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    SearchSort.entries.forEach { sort ->
+                        FilterChip(
+                            selected = searchSort == sort,
+                            onClick = { onSearchSortChange(sort) },
+                            label = { Text(sort.label) },
+                        )
+                    }
                 }
             }
 
@@ -4726,6 +5165,7 @@ private fun AuthorScreen(
     val feed = when (author.selectedTab) {
         AuthorWorkTab.Illust -> author.illusts
         AuthorWorkTab.Manga -> author.manga
+        AuthorWorkTab.Novel -> author.novels
         AuthorWorkTab.Bookmarks -> author.bookmarks
     }
     Scaffold(
@@ -4779,6 +5219,7 @@ private fun AuthorScreen(
                     selected = author.selectedTab,
                     illustCount = author.totalIllusts,
                     mangaCount = author.totalManga,
+                    novelCount = author.totalNovels,
                     bookmarkCount = author.totalBookmarks,
                     onSelect = onSelectTab,
                 )
@@ -4938,6 +5379,7 @@ private fun AuthorTabRow(
     selected: AuthorWorkTab,
     illustCount: Int,
     mangaCount: Int,
+    novelCount: Int,
     bookmarkCount: Int,
     onSelect: (AuthorWorkTab) -> Unit,
 ) {
@@ -4964,9 +5406,626 @@ private fun AuthorTabRow(
                 label = { Text("漫画 $mangaCount") },
             )
             FilterChip(
+                selected = selected == AuthorWorkTab.Novel,
+                onClick = { onSelect(AuthorWorkTab.Novel) },
+                label = { Text("小说 $novelCount") },
+            )
+            FilterChip(
                 selected = selected == AuthorWorkTab.Bookmarks,
                 onClick = { onSelect(AuthorWorkTab.Bookmarks) },
                 label = { Text("收藏 $bookmarkCount") },
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun NovelReaderScreen(
+    illust: Illust?,
+    readerState: NovelReaderState,
+    comments: CommentState,
+    onBack: () -> Unit,
+    onReload: () -> Unit,
+    onDownload: () -> Unit,
+    onToggleBookmark: () -> Unit,
+    onOpenAuthor: (Illust) -> Unit,
+    onTagClick: (String) -> Unit,
+    onCommentInputChange: (String) -> Unit,
+    onSendComment: () -> Unit,
+) {
+    val detail = readerState.detail
+    val title = detail?.title ?: illust?.title ?: "小说"
+    val linkColor = MaterialTheme.colorScheme.primary
+    val blocks = remember(readerState.text, readerState.uploadedImages, readerState.pixivImages, linkColor) {
+        parseNovelBlocks(
+            text = readerState.text,
+            uploadedImages = readerState.uploadedImages,
+            pixivImages = readerState.pixivImages,
+            linkStyle = SpanStyle(color = linkColor),
+        )
+    }
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = onDownload, enabled = !readerState.isLoading) {
+                        Icon(Icons.Default.Download, contentDescription = "下载小说")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                ),
+            )
+        },
+        contentWindowInsets = WindowInsets.safeDrawing,
+    ) { padding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding),
+        ) {
+            when {
+                readerState.isLoading && readerState.text.isBlank() -> {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
+                    }
+                }
+                readerState.error != null && readerState.text.isBlank() -> {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(24.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text(
+                            text = readerState.error,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.error,
+                            textAlign = TextAlign.Center,
+                        )
+                        Button(onClick = onReload) {
+                            Icon(Icons.Default.Refresh, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("重试")
+                        }
+                    }
+                }
+                else -> {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.spacedBy(0.dp),
+                    ) {
+                        item(key = "novel-cover") {
+                            NovelCover(illust = illust, detail = detail)
+                        }
+                        item(key = "novel-meta") {
+                            NovelMetaPanel(
+                                illust = illust,
+                                detail = detail,
+                                readerState = readerState,
+                                onOpenAuthor = onOpenAuthor,
+                                onTagClick = onTagClick,
+                                onToggleBookmark = onToggleBookmark,
+                            )
+                        }
+                        item(key = "novel-text-header") {
+                            Spacer(Modifier.height(4.dp))
+                        }
+                        itemsIndexed(
+                            items = blocks,
+                            key = { index, _ -> "b-$index" },
+                        ) { _, block ->
+                            NovelBlockRow(block)
+                        }
+                        item(key = "novel-comments") {
+                            CommentsPanel(
+                                comments = comments,
+                                onInputChange = onCommentInputChange,
+                                onSend = onSendComment,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                        item(key = "novel-footer") { Spacer(Modifier.height(32.dp)) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SeriesScreen(
+    state: SeriesState,
+    onBack: () -> Unit,
+    onOpenPreview: (Illust) -> Unit,
+    onLoadMore: () -> Unit,
+    onRetry: () -> Unit,
+) {
+    val gridState = rememberLazyStaggeredGridState()
+    LaunchedEffect(state.seriesId, state.items.size, state.nextUrl, state.isLoading) {
+        if (state.items.isEmpty() || state.isLoading || state.nextUrl.isNullOrBlank()) return@LaunchedEffect
+        snapshotFlow {
+            val layout = gridState.layoutInfo
+            val last = layout.visibleItemsInfo.lastOrNull()?.index ?: return@snapshotFlow false
+            last >= layout.totalItemsCount - 4
+        }.distinctUntilChanged().collect { needsMore ->
+            if (needsMore) onLoadMore()
+        }
+    }
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
+                        Text(
+                            text = state.title.ifBlank { "系列" },
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        val subtitle = buildString {
+                            append("作品系列")
+                            if (state.items.isNotEmpty()) {
+                                append(" · ${state.items.size} 件")
+                            }
+                        }
+                        Text(
+                            text = subtitle,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = onRetry, enabled = !state.isLoading) {
+                        Icon(Icons.Default.Refresh, contentDescription = "刷新")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                ),
+            )
+        },
+        contentWindowInsets = WindowInsets.safeDrawing,
+    ) { padding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding),
+        ) {
+            when {
+                state.items.isEmpty() && state.isLoading -> {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
+                    }
+                }
+                state.items.isEmpty() && state.error != null -> {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(24.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text(
+                            text = state.error,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.error,
+                            textAlign = TextAlign.Center,
+                        )
+                        Button(onClick = onRetry) {
+                            Icon(Icons.Default.Refresh, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("重试")
+                        }
+                    }
+                }
+                state.items.isEmpty() -> {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(
+                            text = "系列暂无作品",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                else -> {
+                    LazyVerticalStaggeredGrid(
+                        columns = StaggeredGridCells.Adaptive(150.dp),
+                        state = gridState,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(start = 12.dp, top = 10.dp, end = 12.dp, bottom = 24.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalItemSpacing = 8.dp,
+                    ) {
+                        items(
+                            state.items,
+                            key = { "series-${state.seriesId}-${it.id}" },
+                            contentType = { "illust-card" },
+                        ) { illust ->
+                            IllustCard(
+                                illust = illust,
+                                onClick = onOpenPreview,
+                            )
+                        }
+                        item(span = StaggeredGridItemSpan.FullLine) {
+                            PagingFooter(
+                                isLoadingMore = state.isLoading && state.items.isNotEmpty(),
+                                nextUrl = state.nextUrl,
+                                hasItems = state.items.isNotEmpty(),
+                                onLoadMore = onLoadMore,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private sealed interface NovelBlock {
+    data class Paragraph(val text: AnnotatedString) : NovelBlock
+    data class Image(val url: String?, val rawTag: String) : NovelBlock
+    data class Chapter(val title: String) : NovelBlock
+    data object Blank : NovelBlock
+}
+
+private fun parseNovelBlocks(
+    text: String,
+    uploadedImages: Map<String, String>,
+    pixivImages: Map<String, String>,
+    linkStyle: SpanStyle,
+): List<NovelBlock> {
+    if (text.isBlank()) return emptyList()
+    val lines = text.replace("\r\n", "\n").split("\n")
+    val chapterRegex = Regex("^\\[chapter:(.+)\\]$")
+    val uploadedRegex = Regex("^\\[uploadedimage:(\\d+)\\]$")
+    val pixivImageRegex = Regex("^\\[pixivimage:([0-9-]+)\\]$")
+    val result = mutableListOf<NovelBlock>()
+    for (raw in lines) {
+        val line = raw.trim()
+        if (line.isEmpty() || line.equals("[newpage]", ignoreCase = true)) {
+            result += NovelBlock.Blank
+            continue
+        }
+        val chapter = chapterRegex.matchEntire(line)
+        if (chapter != null) {
+            result += NovelBlock.Chapter(chapter.groupValues[1])
+            continue
+        }
+        val uploaded = uploadedRegex.matchEntire(line)
+        if (uploaded != null) {
+            val id = uploaded.groupValues[1]
+            result += NovelBlock.Image(uploadedImages[id], "uploadedimage:$id")
+            continue
+        }
+        val pixiv = pixivImageRegex.matchEntire(line)
+        if (pixiv != null) {
+            val key = pixiv.groupValues[1]
+            val url = pixivImages[key]
+                ?: pixivImages["$key-1"]
+                ?: pixivImages[key.substringBefore('-')]
+            result += NovelBlock.Image(url, "pixivimage:$key")
+            continue
+        }
+        result += NovelBlock.Paragraph(parseInlineNovel(line, linkStyle))
+    }
+    return result
+}
+
+private fun parseInlineNovel(text: String, linkStyle: SpanStyle): AnnotatedString = buildAnnotatedString {
+    val jumpuriRegex = Regex("^jumpuri:(.*?)>(.+)$")
+    val rbRegex = Regex("^rb:(.*?)>(.+)$")
+    val jumpRegex = Regex("^jump:(\\d+)$")
+    var i = 0
+    while (i < text.length) {
+        val open = text.indexOf("[[", i)
+        if (open < 0) {
+            append(text.substring(i))
+            break
+        }
+        if (open > i) append(text.substring(i, open))
+        val close = text.indexOf("]]", open + 2)
+        if (close < 0) {
+            append(text.substring(open))
+            break
+        }
+        val inner = text.substring(open + 2, close)
+        val jumpuriMatch = jumpuriRegex.matchEntire(inner)
+        val rbMatch = rbRegex.matchEntire(inner)
+        val jumpMatch = jumpRegex.matchEntire(inner)
+        when {
+            jumpuriMatch != null -> {
+                val display = jumpuriMatch.groupValues[1].ifBlank { jumpuriMatch.groupValues[2] }
+                val url = jumpuriMatch.groupValues[2]
+                withLink(LinkAnnotation.Url(url, TextLinkStyles(style = linkStyle))) {
+                    append(display)
+                }
+            }
+            rbMatch != null -> {
+                append(rbMatch.groupValues[1])
+                append("(")
+                append(rbMatch.groupValues[2])
+                append(")")
+            }
+            jumpMatch != null -> append("→ 第${jumpMatch.groupValues[1]}页")
+            else -> append("[[$inner]]")
+        }
+        i = close + 2
+    }
+}
+
+@Composable
+private fun NovelBlockRow(block: NovelBlock) {
+    when (block) {
+        is NovelBlock.Blank -> Spacer(Modifier.height(8.dp))
+        is NovelBlock.Chapter -> Text(
+            text = block.title,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 18.dp, vertical = 12.dp),
+        )
+        is NovelBlock.Paragraph -> Text(
+            text = block.text,
+            style = MaterialTheme.typography.bodyLarge,
+            lineHeight = MaterialTheme.typography.bodyLarge.lineHeight * 1.2f,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 18.dp, vertical = 4.dp),
+        )
+        is NovelBlock.Image -> NovelInlineImage(url = block.url, rawTag = block.rawTag)
+    }
+}
+
+@Composable
+private fun NovelInlineImage(url: String?, rawTag: String) {
+    var aspect by remember(url) { mutableStateOf<Float?>(null) }
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (!url.isNullOrBlank()) {
+            GlideImage(
+                url = url,
+                modifier = Modifier.fillMaxWidth(),
+                aspectRatio = aspect,
+                crop = false,
+                onDrawableSize = { width, height ->
+                    if (width > 0 && height > 0) {
+                        aspect = width.toFloat() / height.toFloat()
+                    }
+                },
+            )
+        } else {
+            Text(
+                text = "[$rawTag]",
+                style = MaterialTheme.typography.bodySmall,
+                fontStyle = FontStyle.Italic,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+                    .padding(16.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun NovelCover(illust: Illust?, detail: NovelDetail?) {
+    val coverUrl = illust?.previewUrl ?: detail?.coverUrl
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(280.dp)
+            .background(MaterialTheme.colorScheme.surfaceVariant),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (!coverUrl.isNullOrBlank()) {
+            GlideImage(
+                url = coverUrl,
+                modifier = Modifier.fillMaxSize(),
+                crop = true,
+            )
+        } else {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.MenuBook,
+                contentDescription = null,
+                modifier = Modifier.size(64.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun NovelMetaPanel(
+    illust: Illust?,
+    detail: NovelDetail?,
+    readerState: NovelReaderState,
+    onOpenAuthor: (Illust) -> Unit,
+    onTagClick: (String) -> Unit,
+    onToggleBookmark: () -> Unit,
+) {
+    val tags = detail?.tags ?: illust?.tags ?: emptyList()
+    val caption = (detail?.caption?.takeIf { it.isNotBlank() }
+        ?: illust?.caption?.takeIf { it.isNotBlank() })
+        ?.plainCaption()
+    val totalView = detail?.totalView ?: illust?.totalView ?: 0
+    val totalBookmarks = detail?.totalBookmarks ?: illust?.totalBookmarks ?: 0
+    val textLength = detail?.textLength ?: 0
+    val seriesTitle = detail?.seriesTitle?.takeIf { it.isNotBlank() }
+        ?: illust?.seriesTitle?.takeIf { it.isNotBlank() }
+    val isBookmarked = illust?.isBookmarked == true
+    val canBookmark = illust != null && !readerState.isBookmarkBusy
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                modifier = Modifier.weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                GlideImage(
+                    url = illust?.authorAvatarUrl ?: detail?.authorAvatarUrl,
+                    modifier = Modifier
+                        .size(42.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable(enabled = illust != null) { illust?.let(onOpenAuthor) },
+                    crop = true,
+                    requestSize = PuxivAvatarImageSize,
+                )
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable(enabled = illust != null) { illust?.let(onOpenAuthor) },
+                ) {
+                    Text(
+                        text = (detail?.title ?: illust?.title.orEmpty()).ifBlank { "#${illust?.id ?: 0}" },
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    val authorName = detail?.authorName ?: illust?.authorName.orEmpty()
+                    val authorAccount = detail?.authorAccount ?: illust?.authorAccount.orEmpty()
+                    Text(
+                        text = buildString {
+                            append(authorName.ifBlank { "Unknown author" })
+                            authorAccount.takeIf { it.isNotBlank() }?.let { append(" @").append(it) }
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.secondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            BookmarkActionButton(
+                isBookmarked = isBookmarked,
+                enabled = canBookmark,
+                onPublicBookmark = onToggleBookmark,
+                onPrivateBookmark = onToggleBookmark,
+                onDeleteBookmark = onToggleBookmark,
+            )
+        }
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            MetadataPill("小说")
+            if (textLength > 0) MetadataPill("${textLength} 字")
+            if (totalBookmarks > 0) MetadataPill("${totalBookmarks} 收藏")
+            if (totalView > 0) MetadataPill("${totalView} 浏览")
+            detail?.createDate?.takeIf { it.isNotBlank() }?.take(10)?.let { MetadataPill(it) }
+                ?: illust?.createDate?.takeIf { it.isNotBlank() }?.take(10)?.let { MetadataPill(it) }
+            if (detail?.isOriginal == true) MetadataPill("原创")
+            if (detail?.xRestrict != null && detail.xRestrict > 0) MetadataPill("R-18")
+        }
+        if (!seriesTitle.isNullOrBlank() && illust?.type?.equals("novel", ignoreCase = true) != true) {
+            val seriesId = detail?.seriesId ?: illust?.seriesId
+            val seriesOpener = LocalSeriesOpener.current
+            val openSeries = if (seriesId != null && seriesId > 0L && seriesOpener != null && illust != null) {
+                {
+                    seriesOpener(
+                        illust.copy(
+                            seriesId = seriesId,
+                            seriesTitle = seriesTitle,
+                            type = "novel",
+                        ),
+                    )
+                }
+            } else {
+                null
+            }
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .let {
+                        if (openSeries != null) it.clickable(onClick = openSeries) else it
+                    },
+                shape = RoundedCornerShape(10.dp),
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.MenuBook,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "系列",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            text = seriesTitle,
+                            style = MaterialTheme.typography.titleSmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    if (openSeries != null) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.NavigateNext,
+                            contentDescription = "查看系列",
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
+            }
+        }
+        if (tags.isNotEmpty()) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                tags.forEach { tag ->
+                    AssistChip(onClick = { onTagClick(tag) }, label = { Text(tag) })
+                }
+            }
+        }
+        caption?.let {
+            Text(
+                text = it,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
@@ -5076,6 +6135,7 @@ private fun IllustCard(
         onClick = { onClick(illust) },
         onLongClick = onLongPress,
     )
+    val seriesOpener = LocalSeriesOpener.current
     ElevatedCard(
         modifier = interactiveModifier,
         shape = RoundedCornerShape(8.dp),
@@ -5089,15 +6149,31 @@ private fun IllustCard(
                 crop = true,
                 requestSize = PuxivCardImageSize,
             )
+            if (illust.type.equals("novel", ignoreCase = true) && illust.tags.isNotEmpty()) {
+                NovelTagOverlay(
+                    tags = illust.tags,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(6.dp),
+                )
+            }
             Row(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(6.dp),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.Top,
             ) {
-                OverlayChip(illust.typeLabel)
-                if (illust.pageCount > 1) {
-                    OverlayChip("${illust.pageCount}P")
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    OverlayChip(illust.typeLabel)
+                    if (illust.pageCount > 1 && !illust.type.equals("novel", ignoreCase = true)) {
+                        OverlayChip("${illust.pageCount}P")
+                    }
+                    if (illust.seriesId != null && seriesOpener != null && !illust.type.equals("novel", ignoreCase = true)) {
+                        SeriesBadge(onClick = { seriesOpener(illust) })
+                    }
                 }
             }
         }
@@ -5118,10 +6194,6 @@ private fun IllustCard(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                MetadataPill(illust.typeLabel)
-                if (illust.pageCount > 1) MetadataPill("${illust.pageCount}P")
-            }
         }
     }
 }
@@ -5157,6 +6229,13 @@ private fun MyState.bookmarkFeed(feed: BookmarkFeed): FeedState {
     return when (feed) {
         BookmarkFeed.Public -> bookmarks
         BookmarkFeed.Private -> privateBookmarks
+    }
+}
+
+private fun MyState.bookmarkNovelsFeed(feed: BookmarkFeed): FeedState {
+    return when (feed) {
+        BookmarkFeed.Public -> bookmarkNovels
+        BookmarkFeed.Private -> privateBookmarkNovels
     }
 }
 
@@ -5946,11 +7025,55 @@ private fun IllustMeta(
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             MetadataPill(illust.typeLabel)
-            MetadataPill("${illust.pageCount}P")
+            if (!illust.type.equals("novel", ignoreCase = true)) {
+                MetadataPill("${illust.pageCount}P")
+            }
             MetadataPill("${illust.totalBookmarks} 收藏")
             if (illust.totalView > 0) MetadataPill("${illust.totalView} 浏览")
             illust.createDate?.takeIf { it.isNotBlank() }?.take(10)?.let { MetadataPill(it) }
             if (illust.aiType != null && illust.aiType > 1) MetadataPill("AI")
+        }
+        val seriesId = illust.seriesId
+        val seriesOpener = LocalSeriesOpener.current
+        if (seriesId != null && seriesOpener != null && !illust.type.equals("novel", ignoreCase = true)) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { seriesOpener(illust) },
+                shape = RoundedCornerShape(10.dp),
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.MenuBook,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "系列",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            text = illust.seriesTitle?.takeIf { it.isNotBlank() } ?: "#$seriesId",
+                            style = MaterialTheme.typography.titleSmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.NavigateNext,
+                        contentDescription = "查看系列",
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
         }
         if (illust.tags.isNotEmpty()) {
             FlowRow(
@@ -6761,7 +7884,16 @@ private fun ProxiedPixivWebViewScreen(
                                 request: WebResourceRequest?,
                                 error: WebResourceError?,
                             ) {
-                                proxyStatus = "加载失败：${error?.description ?: "未知错误"}"
+                                // 只关心主框架真正失败的情况——子资源（广告、追踪域、证书已 proceed 的旧失败）
+                                // 在这里冒出来都和"页面能不能看"无关，悄悄记到诊断里就行，不要刷顶部状态吓用户。
+                                val isMainFrame = request?.isForMainFrame == true
+                                val description = error?.description?.toString().orEmpty()
+                                fallbackProxy.noteWebViewEvent(
+                                    "resource-error main=$isMainFrame url=${request?.url} desc=$description",
+                                )
+                                if (isMainFrame) {
+                                    proxyStatus = "加载失败：${description.ifBlank { "未知错误" }}"
+                                }
                                 super.onReceivedError(view, request, error)
                             }
 
@@ -6867,6 +7999,13 @@ private val RankingMode.label: String
         RankingMode.DayManga -> "漫画日榜"
         RankingMode.WeekManga -> "漫画周榜"
         RankingMode.MonthManga -> "漫画月榜"
+        RankingMode.DayNovel -> "小说日榜"
+        RankingMode.DayAiNovel -> "AI 小说日榜"
+        RankingMode.WeekNovel -> "小说周榜"
+        RankingMode.MonthNovel -> "小说月榜"
+        RankingMode.WeekRookieNovel -> "小说新人"
+        RankingMode.MaleNovel -> "小说男性向"
+        RankingMode.FemaleNovel -> "小说女性向"
     }
 
 private val SearchSort.label: String
@@ -6883,6 +8022,13 @@ private val SearchTarget.label: String
         SearchTarget.Partial -> "标签部分一致"
         SearchTarget.Exact -> "标签完全一致"
         SearchTarget.TitleCaption -> "标题/说明"
+    }
+
+private val SearchKind.label: String
+    get() = when (this) {
+        SearchKind.Illust -> "作品"
+        SearchKind.Novel -> "小说"
+        SearchKind.User -> "作者"
     }
 
 private val DownloadStatus.label: String
@@ -6917,6 +8063,7 @@ private val Illust.typeLabel: String
     get() = when (type.lowercase()) {
         "ugoira" -> "动画"
         "manga" -> "漫画"
+        "novel" -> "小说"
         else -> "插画"
     }
 

@@ -12,16 +12,21 @@ import JunZi.Pixiv.data.model.Illust
 import JunZi.Pixiv.data.model.IllustBookmarkDetail
 import JunZi.Pixiv.data.model.IllustCommentPage
 import JunZi.Pixiv.data.model.IllustPage
+import JunZi.Pixiv.data.model.NovelDetail
+import JunZi.Pixiv.data.model.NovelTextPayload
 import JunZi.Pixiv.data.model.RankingMode
 import JunZi.Pixiv.data.model.SearchSort
 import JunZi.Pixiv.data.model.SearchTarget
 import JunZi.Pixiv.data.model.TrendingTag
 import JunZi.Pixiv.data.model.UgoiraFrameImage
 import JunZi.Pixiv.data.model.UploadIllustRequest
+import JunZi.Pixiv.data.model.UploadNovelRequest
+import JunZi.Pixiv.data.model.UploadNovelResponse
 import JunZi.Pixiv.data.model.UploadStatusResponse
 import JunZi.Pixiv.data.model.UserPreviewPage
 import JunZi.Pixiv.data.model.avatarUrl
 import JunZi.Pixiv.data.model.bestOriginal
+import JunZi.Pixiv.data.model.toDetailDomain
 import JunZi.Pixiv.data.model.toDomain
 import JunZi.Pixiv.data.network.DnsRefreshResult
 import JunZi.Pixiv.data.network.PixivApiClient
@@ -66,6 +71,16 @@ class PixivRepository(
 
     suspend fun recommended(token: String): IllustPage {
         val response = api.recommendedIllust(token)
+        return IllustPage(response.illusts.orEmpty().map { it.toDomain() }, response.nextUrl)
+    }
+
+    suspend fun recommendedManga(token: String): IllustPage {
+        val response = api.recommendedManga(token)
+        return IllustPage(response.illusts.orEmpty().map { it.toDomain() }, response.nextUrl)
+    }
+
+    suspend fun latestManga(token: String): IllustPage {
+        val response = api.latestManga(token)
         return IllustPage(response.illusts.orEmpty().map { it.toDomain() }, response.nextUrl)
     }
 
@@ -143,6 +158,31 @@ class PixivRepository(
         return IllustPage(response.illusts.orEmpty().map { it.toDomain() }, response.nextUrl)
     }
 
+    suspend fun searchNovels(
+        keyword: String,
+        token: String,
+        sort: SearchSort = SearchSort.DateDesc,
+        searchTarget: SearchTarget = SearchTarget.Partial,
+    ): IllustPage {
+        val response = api.searchNovel(
+            keyword = keyword.trim(),
+            accessToken = token,
+            sort = sort.apiValue,
+            searchTarget = searchTarget.apiValue,
+        )
+        return IllustPage(response.novels.orEmpty().map { it.toDomain() }, response.nextUrl)
+    }
+
+    suspend fun searchUsers(keyword: String, token: String): UserPreviewPage {
+        val response = api.searchUser(keyword.trim(), token)
+        return UserPreviewPage(response.userPreviews.orEmpty().mapNotNull { it.toDomain() }, response.nextUrl)
+    }
+
+    suspend fun nextUserPage(nextUrl: String, token: String): UserPreviewPage {
+        val response = api.nextUserPreviewsPage(nextUrl, token)
+        return UserPreviewPage(response.userPreviews.orEmpty().mapNotNull { it.toDomain() }, response.nextUrl)
+    }
+
     suspend fun trendingTags(token: String): List<TrendingTag> {
         val response = api.trendingTags(token)
         return response.trendTags.orEmpty().mapNotNull { it.toDomain() }
@@ -151,6 +191,81 @@ class PixivRepository(
     suspend fun userWorks(userId: Long, token: String, type: String = "illust"): IllustPage {
         val response = api.userIllusts(userId, token, type)
         return IllustPage(response.illusts.orEmpty().map { it.toDomain() }, response.nextUrl)
+    }
+
+    suspend fun recommendedNovels(token: String): IllustPage {
+        val response = api.recommendedNovel(token)
+        return IllustPage(response.novels.orEmpty().map { it.toDomain() }, response.nextUrl)
+    }
+
+    suspend fun rankingNovels(token: String, mode: RankingMode = RankingMode.DayNovel, date: String? = null): IllustPage {
+        return rankingNovels(token, mode.apiValue, date)
+    }
+
+    suspend fun rankingNovels(token: String, mode: String, date: String? = null): IllustPage {
+        val normalizedMode = mode.trim().ifBlank { RankingMode.DayNovel.apiValue }
+        val response = api.rankingNovel(token, normalizedMode, date.apiDateOrNull())
+        return IllustPage(response.novels.orEmpty().map { it.toDomain() }, response.nextUrl)
+    }
+
+    suspend fun latestNovels(token: String): IllustPage {
+        val response = api.latestNovel(token)
+        return IllustPage(response.novels.orEmpty().map { it.toDomain() }, response.nextUrl)
+    }
+
+    suspend fun followingNovels(token: String, restrict: BookmarkRestrict = BookmarkRestrict.Public): IllustPage {
+        val response = api.followingNovel(token, restrict.apiValue)
+        return IllustPage(response.novels.orEmpty().map { it.toDomain() }, response.nextUrl)
+    }
+
+    suspend fun userNovels(userId: Long, token: String): IllustPage {
+        val response = api.userNovels(userId, token)
+        return IllustPage(response.novels.orEmpty().map { it.toDomain() }, response.nextUrl)
+    }
+
+    suspend fun bookmarkedNovels(
+        userId: Long,
+        token: String,
+        restrict: BookmarkRestrict = BookmarkRestrict.Public,
+        tag: String? = null,
+    ): IllustPage {
+        val response = api.bookmarkedNovels(userId, token, restrict.apiValue, tag)
+        return IllustPage(response.novels.orEmpty().map { it.toDomain() }, response.nextUrl)
+    }
+
+    suspend fun nextNovelPage(nextUrl: String, token: String): IllustPage {
+        val response = api.nextNovelPage(nextUrl, token)
+        return IllustPage(response.novels.orEmpty().map { it.toDomain() }, response.nextUrl)
+    }
+
+    suspend fun novelDetail(novelId: Long, token: String): NovelDetail {
+        return requireNotNull(api.novelDetail(novelId, token).novel?.toDetailDomain()) { "Novel not found" }
+    }
+
+    suspend fun novelAsIllust(novelId: Long, token: String): Illust {
+        return requireNotNull(api.novelDetail(novelId, token).novel?.toDomain()) { "Novel not found" }
+    }
+
+    suspend fun illustSeries(seriesId: Long, token: String): IllustPage {
+        val response = api.illustSeries(seriesId, token)
+        return IllustPage(response.illusts.orEmpty().map { it.toDomain() }, response.nextUrl)
+    }
+
+    suspend fun novelText(novelId: Long, token: String): NovelTextPayload {
+        return api.novelText(novelId, token)
+    }
+
+    suspend fun addNovelBookmark(
+        novelId: Long,
+        token: String,
+        restrict: BookmarkRestrict = BookmarkRestrict.Public,
+        tags: List<String> = emptyList(),
+    ) {
+        api.addNovelBookmark(novelId, token, restrict.apiValue, tags)
+    }
+
+    suspend fun deleteNovelBookmark(novelId: Long, token: String) {
+        api.deleteNovelBookmark(novelId, token)
     }
 
     suspend fun bookmarkedIllusts(
@@ -219,8 +334,17 @@ class PixivRepository(
         return IllustCommentPage(response.comments.orEmpty().mapNotNull { it.toDomain() }, response.nextUrl)
     }
 
+    suspend fun novelComments(id: Long, token: String): IllustCommentPage {
+        val response = api.novelComments(id, token)
+        return IllustCommentPage(response.comments.orEmpty().mapNotNull { it.toDomain() }, response.nextUrl)
+    }
+
     suspend fun addComment(id: Long, comment: String, token: String) {
         api.addIllustComment(id, comment.trim(), token)
+    }
+
+    suspend fun addNovelComment(id: Long, comment: String, token: String) {
+        api.addNovelComment(id, comment.trim(), token)
     }
 
     suspend fun addBookmark(
@@ -332,6 +456,10 @@ class PixivRepository(
             "Pixiv did not return an upload convert key"
         }
         return api.uploadStatus(convertKey, token)
+    }
+
+    suspend fun uploadNovel(token: String, request: UploadNovelRequest): UploadNovelResponse {
+        return api.uploadNovel(token, request)
     }
 
     suspend fun probeImage(url: String) {

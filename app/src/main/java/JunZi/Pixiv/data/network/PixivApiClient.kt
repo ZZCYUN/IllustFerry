@@ -5,6 +5,9 @@ import JunZi.Pixiv.data.model.IllustBookmarkDetailResponse
 import JunZi.Pixiv.data.model.IllustCommentsResponse
 import JunZi.Pixiv.data.model.IllustsResponse
 import JunZi.Pixiv.data.model.BookmarkTagsResponse
+import JunZi.Pixiv.data.model.NovelDetailResponse
+import JunZi.Pixiv.data.model.NovelTextPayload
+import JunZi.Pixiv.data.model.NovelsResponse
 import JunZi.Pixiv.data.model.OAuthTokenResponse
 import JunZi.Pixiv.data.model.PixivErrorResponse
 import JunZi.Pixiv.data.model.TrendingTagsResponse
@@ -12,6 +15,8 @@ import JunZi.Pixiv.data.model.UserDetailResponse
 import JunZi.Pixiv.data.model.UserPreviewsResponse
 import JunZi.Pixiv.data.model.UploadIllustRequest
 import JunZi.Pixiv.data.model.UploadIllustResponse
+import JunZi.Pixiv.data.model.UploadNovelRequest
+import JunZi.Pixiv.data.model.UploadNovelResponse
 import JunZi.Pixiv.data.model.UploadStatusResponse
 import JunZi.Pixiv.data.model.UgoiraMetadataResponse
 import com.google.gson.Gson
@@ -80,6 +85,23 @@ class PixivApiClient(
     suspend fun recommendedIllust(accessToken: String): IllustsResponse = withContext(Dispatchers.IO) {
         val url = "$API_BASE/v1/illust/recommended".toHttpUrl().newBuilder()
             .addQueryParameter("filter", FILTER_FOR_IOS)
+            .build()
+
+        execute(authorizedGet(url.toString(), accessToken), IllustsResponse::class.java)
+    }
+
+    suspend fun recommendedManga(accessToken: String): IllustsResponse = withContext(Dispatchers.IO) {
+        val url = "$API_BASE/v1/manga/recommended".toHttpUrl().newBuilder()
+            .addQueryParameter("filter", FILTER_FOR_IOS)
+            .build()
+
+        execute(authorizedGet(url.toString(), accessToken), IllustsResponse::class.java)
+    }
+
+    suspend fun latestManga(accessToken: String): IllustsResponse = withContext(Dispatchers.IO) {
+        val url = "$API_BASE/v1/illust/new".toHttpUrl().newBuilder()
+            .addQueryParameter("filter", FILTER_FOR_IOS)
+            .addQueryParameter("content_type", "manga")
             .build()
 
         execute(authorizedGet(url.toString(), accessToken), IllustsResponse::class.java)
@@ -169,6 +191,18 @@ class PixivApiClient(
         execute(authorizedGet(url.toString(), accessToken), IllustsResponse::class.java)
     }
 
+    suspend fun searchUser(
+        keyword: String,
+        accessToken: String,
+    ): UserPreviewsResponse = withContext(Dispatchers.IO) {
+        val url = "$API_BASE/v1/search/user".toHttpUrl().newBuilder()
+            .addQueryParameter("filter", FILTER_FOR_IOS)
+            .addQueryParameter("word", keyword)
+            .build()
+
+        execute(authorizedGet(url.toString(), accessToken), UserPreviewsResponse::class.java)
+    }
+
     suspend fun trendingTags(accessToken: String): TrendingTagsResponse = withContext(Dispatchers.IO) {
         val url = "$API_BASE/v1/trending-tags/illust".toHttpUrl().newBuilder()
             .addQueryParameter("filter", FILTER_FOR_IOS)
@@ -189,6 +223,177 @@ class PixivApiClient(
             .build()
 
         execute(authorizedGet(url.toString(), accessToken), IllustsResponse::class.java)
+    }
+
+    suspend fun recommendedNovel(accessToken: String): NovelsResponse = withContext(Dispatchers.IO) {
+        val url = "$API_BASE/v1/novel/recommended".toHttpUrl().newBuilder()
+            .addQueryParameter("include_ranking_novels", "true")
+            .build()
+        execute(authorizedGet(url.toString(), accessToken), NovelsResponse::class.java)
+    }
+
+    suspend fun rankingNovel(
+        accessToken: String,
+        mode: String = "day",
+        date: String? = null,
+    ): NovelsResponse = withContext(Dispatchers.IO) {
+        val normalizedMode = mode.removeSuffix("_novel").ifBlank { "day" }
+        val builder = "$API_BASE/v1/novel/ranking".toHttpUrl().newBuilder()
+            .addQueryParameter("mode", normalizedMode)
+        date?.takeIf { it.isNotBlank() }?.let { builder.addQueryParameter("date", it) }
+        execute(authorizedGet(builder.build().toString(), accessToken), NovelsResponse::class.java)
+    }
+
+    suspend fun illustSeries(seriesId: Long, accessToken: String): IllustsResponse = withContext(Dispatchers.IO) {
+        val url = "$API_BASE/v1/illust/series".toHttpUrl().newBuilder()
+            .addQueryParameter("illust_series_id", seriesId.toString())
+            .addQueryParameter("filter", FILTER_FOR_IOS)
+            .build()
+        execute(authorizedGet(url.toString(), accessToken), IllustsResponse::class.java)
+    }
+
+    suspend fun latestNovel(accessToken: String): NovelsResponse = withContext(Dispatchers.IO) {
+        val url = "$API_BASE/v1/novel/new".toHttpUrl()
+        execute(authorizedGet(url.toString(), accessToken), NovelsResponse::class.java)
+    }
+
+    suspend fun followingNovel(
+        accessToken: String,
+        restrict: String = "all",
+    ): NovelsResponse = withContext(Dispatchers.IO) {
+        val url = "$API_BASE/v1/novel/follow".toHttpUrl().newBuilder()
+            .addQueryParameter("restrict", restrict)
+            .build()
+        execute(authorizedGet(url.toString(), accessToken), NovelsResponse::class.java)
+    }
+
+    suspend fun userNovels(userId: Long, accessToken: String): NovelsResponse = withContext(Dispatchers.IO) {
+        val url = "$API_BASE/v1/user/novels".toHttpUrl().newBuilder()
+            .addQueryParameter("user_id", userId.toString())
+            .build()
+        execute(authorizedGet(url.toString(), accessToken), NovelsResponse::class.java)
+    }
+
+    suspend fun bookmarkedNovels(
+        userId: Long,
+        accessToken: String,
+        restrict: String = "public",
+        tag: String? = null,
+    ): NovelsResponse = withContext(Dispatchers.IO) {
+        val builder = "$API_BASE/v1/user/bookmarks/novel".toHttpUrl().newBuilder()
+            .addQueryParameter("user_id", userId.toString())
+            .addQueryParameter("restrict", restrict)
+        tag?.trim()?.trimStart('#')?.takeIf { it.isNotBlank() }?.let {
+            builder.addQueryParameter("tag", it)
+        }
+        execute(authorizedGet(builder.build().toString(), accessToken), NovelsResponse::class.java)
+    }
+
+    suspend fun searchNovel(
+        keyword: String,
+        accessToken: String,
+        sort: String = "date_desc",
+        searchTarget: String = "partial_match_for_tags",
+    ): NovelsResponse = withContext(Dispatchers.IO) {
+        val url = "$API_BASE/v1/search/novel".toHttpUrl().newBuilder()
+            .addQueryParameter("sort", sort)
+            .addQueryParameter("include_translated_tag_results", "true")
+            .addQueryParameter("merge_plain_keyword_results", "true")
+            .addQueryParameter("search_target", searchTarget)
+            .addQueryParameter("word", keyword)
+            .build()
+        execute(authorizedGet(url.toString(), accessToken), NovelsResponse::class.java)
+    }
+
+    suspend fun novelDetail(novelId: Long, accessToken: String): NovelDetailResponse = withContext(Dispatchers.IO) {
+        val url = "$API_BASE/v2/novel/detail".toHttpUrl().newBuilder()
+            .addQueryParameter("novel_id", novelId.toString())
+            .build()
+        execute(authorizedGet(url.toString(), accessToken), NovelDetailResponse::class.java)
+    }
+
+    suspend fun novelText(novelId: Long, accessToken: String): NovelTextPayload = withContext(Dispatchers.IO) {
+        val url = "$API_BASE/webview/v2/novel".toHttpUrl().newBuilder()
+            .addQueryParameter("id", novelId.toString())
+            .addQueryParameter("viewer_version", "20221031_ai")
+            .build()
+        val request = authorizedGet(url.toString(), accessToken)
+        val html = currentApiClient().newCall(request).execute().use { response ->
+            val payload = response.body.string()
+            if (!response.isSuccessful) {
+                val error = runCatching { gson.fromJson(payload, PixivErrorResponse::class.java) }.getOrNull()
+                val message = error?.error?.userMessage
+                    ?: error?.error?.message
+                    ?: error?.errors?.userMessage
+                    ?: error?.errors?.message
+                    ?: response.message
+                throw PixivApiException(response.code, "HTTP ${response.code}: $message", payload.take(240))
+            }
+            payload
+        }
+        val match = Regex("novel:\\s*(\\{.+\\}),\\s*isOwnWork", RegexOption.DOT_MATCHES_ALL).find(html)
+            ?: throw IOException("无法解析小说正文：未匹配到 novel JSON")
+        val json = gson.fromJson(match.groupValues[1], WebviewNovel::class.java)
+        val uploaded = json.images.orEmpty().mapNotNull { (key, value) ->
+            val pick = value?.urls?.let { it.x1200 ?: it.mw480 ?: it.original ?: it.mw240 }
+            if (pick.isNullOrBlank()) null else key to PixivImageProxy.convert(pick)!!
+        }.toMap()
+        val pixiv = json.illusts.orEmpty().mapNotNull { (key, value) ->
+            val pick = value?.urls?.let { it.x1200 ?: it.mw480 ?: it.original ?: it.mw240 }
+            if (pick.isNullOrBlank()) null else key to PixivImageProxy.convert(pick)!!
+        }.toMap()
+        NovelTextPayload(
+            text = json.text.orEmpty(),
+            uploadedImages = uploaded,
+            pixivImages = pixiv,
+        )
+    }
+
+    private data class WebviewNovel(
+        @com.google.gson.annotations.SerializedName("text") val text: String? = null,
+        @com.google.gson.annotations.SerializedName("images") val images: Map<String, WebviewImage?>? = null,
+        @com.google.gson.annotations.SerializedName("illusts") val illusts: Map<String, WebviewImage?>? = null,
+    )
+
+    private data class WebviewImage(
+        @com.google.gson.annotations.SerializedName("urls") val urls: WebviewImageUrls? = null,
+    )
+
+    private data class WebviewImageUrls(
+        @com.google.gson.annotations.SerializedName("240mw") val mw240: String? = null,
+        @com.google.gson.annotations.SerializedName("480mw") val mw480: String? = null,
+        @com.google.gson.annotations.SerializedName("1200x1200") val x1200: String? = null,
+        @com.google.gson.annotations.SerializedName("original") val original: String? = null,
+    )
+
+    suspend fun nextNovelPage(nextUrl: String, accessToken: String): NovelsResponse = withContext(Dispatchers.IO) {
+        execute(authorizedGet(nextUrl, accessToken), NovelsResponse::class.java)
+    }
+
+    suspend fun addNovelBookmark(
+        novelId: Long,
+        accessToken: String,
+        restrict: String = "public",
+        tags: List<String> = emptyList(),
+    ): Unit = withContext(Dispatchers.IO) {
+        val bodyBuilder = FormBody.Builder()
+            .add("novel_id", novelId.toString())
+            .add("restrict", restrict)
+        tags.asSequence()
+            .map { it.trim().trimStart('#') }
+            .filter { it.isNotBlank() }
+            .distinctBy { it.lowercase(Locale.ROOT) }
+            .take(10)
+            .joinToString(" ")
+            .let { bodyBuilder.add("tags[]", it) }
+        executeEmpty(authorizedPost("$API_BASE/v2/novel/bookmark/add", accessToken, bodyBuilder.build()))
+    }
+
+    suspend fun deleteNovelBookmark(novelId: Long, accessToken: String): Unit = withContext(Dispatchers.IO) {
+        val body = FormBody.Builder()
+            .add("novel_id", novelId.toString())
+            .build()
+        executeEmpty(authorizedPost("$API_BASE/v1/novel/bookmark/delete", accessToken, body))
     }
 
     suspend fun bookmarkedIllusts(
@@ -310,6 +515,15 @@ class PixivApiClient(
         execute(authorizedGet(url.toString(), accessToken), IllustCommentsResponse::class.java)
     }
 
+    suspend fun novelComments(novelId: Long, accessToken: String): IllustCommentsResponse = withContext(Dispatchers.IO) {
+        val url = "$API_BASE/v3/novel/comments".toHttpUrl().newBuilder()
+            .addQueryParameter("novel_id", novelId.toString())
+            .addQueryParameter("include_total_comments", "true")
+            .build()
+
+        execute(authorizedGet(url.toString(), accessToken), IllustCommentsResponse::class.java)
+    }
+
     suspend fun addIllustComment(
         illustId: Long,
         comment: String,
@@ -321,6 +535,19 @@ class PixivApiClient(
             .build()
 
         executeEmpty(authorizedPost("$API_BASE/v1/illust/comment/add", accessToken, body))
+    }
+
+    suspend fun addNovelComment(
+        novelId: Long,
+        comment: String,
+        accessToken: String,
+    ): Unit = withContext(Dispatchers.IO) {
+        val body = FormBody.Builder()
+            .add("novel_id", novelId.toString())
+            .add("comment", comment)
+            .build()
+
+        executeEmpty(authorizedPost("$API_BASE/v1/novel/comment/add", accessToken, body))
     }
 
     suspend fun addIllustBookmark(
@@ -421,6 +648,44 @@ class PixivApiClient(
             .build()
         val request = authorizedPost("$API_BASE/v1/upload/status", accessToken, body)
         execute(request, UploadStatusResponse::class.java)
+    }
+
+    suspend fun uploadNovel(
+        accessToken: String,
+        upload: UploadNovelRequest,
+    ): UploadNovelResponse = withContext(Dispatchers.IO) {
+        val body = MultipartBody.Builder("--boundary-${System.currentTimeMillis()}-pixiv")
+            .setType(MultipartBody.FORM)
+            .addFormDataPart("title", upload.title)
+            .addFormDataPart("caption", upload.caption)
+            .addFormDataPart("text", upload.text)
+            .addFormDataPart("visibility_scope", upload.visibilityScope.toString())
+            .addFormDataPart("comment_access_control", upload.commentAccessControl.toString())
+            .addFormDataPart("x_restrict", upload.xRestrict)
+            .addFormDataPart("is_sexual", upload.isSexual.toString())
+            .addFormDataPart("novel_ai_type", upload.novelAiType.toString())
+            .addFormDataPart("is_original", upload.isOriginal.toString())
+            .addFormDataPart("is_allow_citation_work", "true")
+            .apply {
+                upload.tags.forEach { tag ->
+                    addFormDataPart("tags[]", tag)
+                }
+                upload.cover?.let { cover ->
+                    addFormDataPart(
+                        "cover",
+                        cover.fileName,
+                        cover.bytes.toRequestBody(cover.mimeType.toMediaTypeOrNull()),
+                    )
+                }
+            }
+            .build()
+
+        val request = Request.Builder()
+            .url("$API_BASE/v2/upload/novel")
+            .header("Authorization", "Bearer ${accessToken.removePrefix("Bearer ").trim()}")
+            .post(body)
+            .build()
+        execute(request, UploadNovelResponse::class.java)
     }
 
     suspend fun downloadImageBytes(url: String): ByteArray = withContext(Dispatchers.IO) {

@@ -22,15 +22,18 @@ import JunZi.Pixiv.data.model.AuthSession
 import JunZi.Pixiv.data.model.AuthorProfile
 import JunZi.Pixiv.data.model.BookmarkRestrict
 import JunZi.Pixiv.data.model.BookmarkTag
+import JunZi.Pixiv.data.model.HomeCategory
 import JunZi.Pixiv.data.model.Illust
 import JunZi.Pixiv.data.model.IllustComment
 import JunZi.Pixiv.data.model.IllustPage
+import JunZi.Pixiv.data.model.NovelDetail
 import JunZi.Pixiv.data.model.RankingMode
 import JunZi.Pixiv.data.model.SearchSort
 import JunZi.Pixiv.data.model.SearchTarget
 import JunZi.Pixiv.data.model.TrendingTag
 import JunZi.Pixiv.data.model.UploadIllustRequest
 import JunZi.Pixiv.data.model.UploadImagePart
+import JunZi.Pixiv.data.model.UploadNovelRequest
 import JunZi.Pixiv.data.model.UgoiraFrameImage
 import JunZi.Pixiv.data.model.UserPreview
 import JunZi.Pixiv.data.model.UserPreviewPage
@@ -63,6 +66,8 @@ enum class AppScreen {
     Settings,
     Preview,
     Author,
+    NovelReader,
+    Series,
 }
 
 private fun AppScreen.defaultBackTarget(): AppScreen {
@@ -76,6 +81,8 @@ private fun AppScreen.defaultBackTarget(): AppScreen {
         AppScreen.Settings -> AppScreen.Me
         AppScreen.Preview -> AppScreen.Home
         AppScreen.Author -> AppScreen.Home
+        AppScreen.NovelReader -> AppScreen.Home
+        AppScreen.Series -> AppScreen.Home
     }
 }
 
@@ -136,6 +143,7 @@ enum class DownloadStatus {
 enum class AuthorWorkTab(val apiValue: String) {
     Illust("illust"),
     Manga("manga"),
+    Novel("novel"),
     Bookmarks(""),
 }
 
@@ -147,6 +155,17 @@ enum class FollowUserFeed {
 enum class BookmarkFeed {
     Public,
     Private,
+}
+
+enum class BookmarkKind {
+    Illust,
+    Novel,
+}
+
+enum class SearchKind {
+    Illust,
+    Novel,
+    User,
 }
 
 @Immutable
@@ -178,11 +197,21 @@ data class DiagnosticsState(
 )
 
 @Immutable
-data class HomeState(
-    val walkthrough: FeedState = FeedState(),
+data class HomeCategoryState(
     val recommended: FeedState = FeedState(),
     val ranking: FeedState = FeedState(),
     val latest: FeedState = FeedState(),
+    val rankingMode: RankingMode = RankingMode.Day,
+    val hasLoaded: Boolean = false,
+)
+
+@Immutable
+data class HomeState(
+    val category: HomeCategory = HomeCategory.Illust,
+    val walkthrough: FeedState = FeedState(),
+    val illust: HomeCategoryState = HomeCategoryState(rankingMode = RankingMode.Day),
+    val manga: HomeCategoryState = HomeCategoryState(rankingMode = RankingMode.DayManga),
+    val novel: HomeCategoryState = HomeCategoryState(rankingMode = RankingMode.DayNovel),
     val diagnostics: DiagnosticsState = DiagnosticsState(),
     val hasLoaded: Boolean = false,
 )
@@ -207,6 +236,8 @@ data class MyState(
     val works: FeedState = FeedState(),
     val bookmarks: FeedState = FeedState(),
     val privateBookmarks: FeedState = FeedState(),
+    val bookmarkNovels: FeedState = FeedState(),
+    val privateBookmarkNovels: FeedState = FeedState(),
     val publicBookmarkTags: List<BookmarkTag> = emptyList(),
     val privateBookmarkTags: List<BookmarkTag> = emptyList(),
     val hasBookmarkTagsLoaded: Boolean = false,
@@ -285,14 +316,39 @@ data class AuthorState(
     val myPixivCount: Int = 0,
     val totalIllusts: Int = 0,
     val totalManga: Int = 0,
+    val totalNovels: Int = 0,
     val totalBookmarks: Int = 0,
     val selectedTab: AuthorWorkTab = AuthorWorkTab.Illust,
     val illusts: FeedState = FeedState(),
     val manga: FeedState = FeedState(),
+    val novels: FeedState = FeedState(),
     val bookmarks: FeedState = FeedState(),
     val isLoadingProfile: Boolean = false,
     val isLoadingWorks: Boolean = false,
     val isFollowBusy: Boolean = false,
+)
+
+@Immutable
+data class NovelReaderState(
+    val isLoading: Boolean = false,
+    val detail: NovelDetail? = null,
+    val text: String = "",
+    val uploadedImages: Map<String, String> = emptyMap(),
+    val pixivImages: Map<String, String> = emptyMap(),
+    val error: String? = null,
+    val isBookmarkBusy: Boolean = false,
+    val returnScreen: AppScreen = AppScreen.Home,
+)
+
+@Immutable
+data class SeriesState(
+    val seriesId: Long = 0L,
+    val title: String = "",
+    val items: List<Illust> = emptyList(),
+    val nextUrl: String? = null,
+    val isLoading: Boolean = false,
+    val error: String? = null,
+    val returnScreen: AppScreen = AppScreen.Home,
 )
 
 @Immutable
@@ -312,6 +368,8 @@ private data class NavigationEntry(
     val screen: AppScreen,
     val preview: PreviewSnapshot? = null,
     val author: AuthorState? = null,
+    val novelReader: NovelReaderState? = null,
+    val series: SeriesState? = null,
 )
 
 private data class DownloadWriteResult(
@@ -320,6 +378,11 @@ private data class DownloadWriteResult(
     val format: UgoiraSaveFormat? = null,
     val savedUris: List<String> = emptyList(),
 )
+
+private sealed interface SearchResult {
+    data class Works(val page: IllustPage) : SearchResult
+    data class Users(val page: UserPreviewPage) : SearchResult
+}
 
 @Immutable
 data class PuxivUiState(
@@ -331,6 +394,8 @@ data class PuxivUiState(
     val mine: MyState = MyState(),
     val history: HistoryState = HistoryState(),
     val author: AuthorState = AuthorState(),
+    val novelReader: NovelReaderState = NovelReaderState(),
+    val series: SeriesState = SeriesState(),
     val downloads: DownloadState = DownloadState(),
     val rankingMode: RankingMode = RankingMode.Day,
     val rankingDate: String = "",
@@ -339,6 +404,7 @@ data class PuxivUiState(
     val authCodeInput: String = "",
     val loginUrl: String = "",
     val keyword: String = "",
+    val searchKind: SearchKind = SearchKind.Illust,
     val searchSort: SearchSort = SearchSort.DateDesc,
     val searchTarget: SearchTarget = SearchTarget.Partial,
     val searchStartDate: String = "",
@@ -346,6 +412,7 @@ data class PuxivUiState(
     val searchBookmarkNum: String = "",
     val trendingTags: List<TrendingTag> = emptyList(),
     val items: List<Illust> = emptyList(),
+    val searchUsers: List<UserPreview> = emptyList(),
     val nextUrl: String? = null,
     val isSearchActive: Boolean = false,
     val selectedIllust: Illust? = null,
@@ -447,24 +514,64 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
 
     fun updateKeyword(value: String) = _uiState.update { it.copy(keyword = value) }
 
-    fun updateRankingMode(mode: RankingMode) {
-        if (_uiState.value.rankingMode == mode) return
-        _uiState.update { state ->
-            state.copy(
-                rankingMode = mode,
-                home = state.home.copy(ranking = FeedState()),
+    fun updateSearchKind(kind: SearchKind) {
+        if (_uiState.value.searchKind == kind) return
+        val shouldRefresh = shouldRefreshSearchAfterParamChange()
+        _uiState.update {
+            it.copy(
+                searchKind = kind,
+                items = emptyList(),
+                searchUsers = emptyList(),
+                nextUrl = null,
+                isSearchActive = if (shouldRefresh) it.isSearchActive else false,
             )
         }
-        loadHomeFeed(HomeFeed.Ranking, refresh = true)
+        if (shouldRefresh) search()
+    }
+
+    fun updateRankingMode(mode: RankingMode) {
+        val state = _uiState.value
+        val category = mode.category
+        val homeCategoryState = state.home.categoryState(category)
+        if (state.home.category == category && homeCategoryState.rankingMode == mode) return
+        _uiState.update {
+            it.copy(
+                home = it.home
+                    .copy(category = category)
+                    .withCategoryState(category) { cat ->
+                        cat.copy(rankingMode = mode, ranking = FeedState())
+                    },
+                rankingMode = mode,
+            )
+        }
+        loadHomeFeed(category, HomeFeed.Ranking, refresh = true)
     }
 
     fun updateRankingDate(value: String) = _uiState.update { it.copy(rankingDate = value.trim()) }
 
-    fun applyRankingFilters() {
-        _uiState.update { state ->
-            state.copy(home = state.home.copy(ranking = FeedState()))
+    fun selectHomeCategory(category: HomeCategory) {
+        val state = _uiState.value
+        if (state.home.category == category) return
+        val target = state.home.categoryState(category)
+        _uiState.update {
+            it.copy(
+                home = it.home.copy(category = category),
+                rankingMode = target.rankingMode,
+            )
         }
-        loadHomeFeed(HomeFeed.Ranking, refresh = true)
+        if (!target.hasLoaded && state.session != null) {
+            loadCategoryFeeds(category, refresh = true)
+        }
+    }
+
+    fun applyRankingFilters() {
+        val category = _uiState.value.home.category
+        _uiState.update { state ->
+            state.copy(
+                home = state.home.withCategoryState(category) { it.copy(ranking = FeedState()) },
+            )
+        }
+        loadHomeFeed(category, HomeFeed.Ranking, refresh = true)
     }
 
     fun clearRankingDate() {
@@ -905,6 +1012,7 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
             it.copy(
                 keyword = "",
                 items = emptyList(),
+                searchUsers = emptyList(),
                 nextUrl = null,
                 isSearchActive = false,
                 isLoadingMore = false,
@@ -919,51 +1027,72 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
         if (!refresh && state.home.hasLoaded) return
         _uiState.update { it.copy(home = it.home.copy(hasLoaded = true)) }
         if (state.session == null) {
-            loadHomeFeed(HomeFeed.Walkthrough, refresh = true)
+            loadHomeFeed(state.home.category, HomeFeed.Walkthrough, refresh = true)
             return
         }
-        listOf(HomeFeed.Recommended, HomeFeed.Ranking, HomeFeed.Latest).forEach { loadHomeFeed(it, refresh = true) }
+        loadCategoryFeeds(state.home.category, refresh = true)
+    }
+
+    private fun loadCategoryFeeds(category: HomeCategory, refresh: Boolean) {
+        _uiState.update {
+            it.copy(home = it.home.withCategoryState(category) { state -> state.copy(hasLoaded = true) })
+        }
+        listOf(HomeFeed.Recommended, HomeFeed.Ranking, HomeFeed.Latest).forEach {
+            loadHomeFeed(category, it, refresh = refresh)
+        }
     }
 
     fun loadHomeFeed(feed: HomeFeed, refresh: Boolean = false) {
+        loadHomeFeed(_uiState.value.home.category, feed, refresh)
+    }
+
+    fun loadHomeFeed(category: HomeCategory, feed: HomeFeed, refresh: Boolean = false) {
         val state = _uiState.value
         val token = state.session?.accessToken
         val anonymousWalkthrough = token.isNullOrBlank() && feed == HomeFeed.Walkthrough
         if (!anonymousWalkthrough && token.isNullOrBlank()) return
-        val current = state.home.feed(feed)
-        val requestRankingMode = state.rankingMode
+        val current = state.home.feed(category, feed)
+        val requestRankingMode = state.home.categoryState(category).rankingMode
         val requestRankingDate = state.rankingDate.apiDateOrNull()
         if (current.isLoading) return
 
         viewModelScope.launch {
-            _uiState.update { state ->
-                state.copy(home = state.home.withFeed(feed) { it.copy(isLoading = true, error = null) })
+            _uiState.update { current ->
+                current.copy(
+                    home = current.home.withFeed(category, feed) { it.copy(isLoading = true, error = null) },
+                )
             }
             runCatching {
                 if (anonymousWalkthrough) {
                     repository.walkthrough()
                 } else {
                     withAccessToken { accessToken ->
-                        if (refresh) firstHomePage(feed, accessToken, requestRankingMode, requestRankingDate) else {
-                            val nextUrl = _uiState.value.home.feed(feed).nextUrl ?: return@withAccessToken null
-                            repository.nextPage(nextUrl, accessToken)
+                        if (refresh) firstHomePage(category, feed, accessToken, requestRankingMode, requestRankingDate) else {
+                            val nextUrl = _uiState.value.home.feed(category, feed).nextUrl ?: return@withAccessToken null
+                            if (category == HomeCategory.Novel) {
+                                repository.nextNovelPage(nextUrl, accessToken)
+                            } else {
+                                repository.nextPage(nextUrl, accessToken)
+                            }
                         }
                     }
                 }
             }.onSuccess { page ->
-                if (feed == HomeFeed.Ranking && _uiState.value.rankingRequestChanged(requestRankingMode, requestRankingDate)) {
+                if (feed == HomeFeed.Ranking && _uiState.value.rankingRequestChanged(category, requestRankingMode, requestRankingDate)) {
                     return@onSuccess
                 }
                 if (page == null) {
-                    _uiState.update { state ->
-                        state.copy(home = state.home.withFeed(feed) { it.copy(isLoading = false) })
+                    _uiState.update { current ->
+                        current.copy(
+                            home = current.home.withFeed(category, feed) { it.copy(isLoading = false) },
+                        )
                     }
                     return@onSuccess
                 }
                 val filteredPage = page.filteredBy(excludedTags())
-                _uiState.update { state ->
-                    state.copy(
-                        home = state.home.withFeed(feed) { old ->
+                _uiState.update { current ->
+                    current.copy(
+                        home = current.home.withFeed(category, feed) { old ->
                             old.copy(
                                 items = if (refresh) filteredPage.items else old.items + filteredPage.items,
                                 nextUrl = filteredPage.nextUrl,
@@ -974,12 +1103,12 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
             }.onFailure { error ->
-                if (feed == HomeFeed.Ranking && _uiState.value.rankingRequestChanged(requestRankingMode, requestRankingDate)) {
+                if (feed == HomeFeed.Ranking && _uiState.value.rankingRequestChanged(category, requestRankingMode, requestRankingDate)) {
                     return@onFailure
                 }
-                _uiState.update { state ->
-                    state.copy(
-                        home = state.home.withFeed(feed) {
+                _uiState.update { current ->
+                    current.copy(
+                        home = current.home.withFeed(category, feed) {
                             it.copy(isLoading = false, error = error.readableMessage())
                         },
                     )
@@ -1145,13 +1274,17 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun deleteHistoryItem(illustId: Long) {
+    fun deleteHistoryItem(illust: Illust) {
+        val storageKey = historyStorageKey(illust)
+        val displayId = illust.id
         viewModelScope.launch(Dispatchers.IO) {
-            historyStore.delete(illustId)
+            historyStore.delete(storageKey)
             _uiState.update { state ->
                 state.copy(
                     history = state.history.copy(
-                        items = state.history.items.filterNot { it.illust.id == illustId },
+                        items = state.history.items.filterNot {
+                            it.illust.id == displayId && it.illust.type.equals(illust.type, ignoreCase = true)
+                        },
                         nextOffset = (state.history.nextOffset - 1).coerceAtLeast(0),
                     ),
                 )
@@ -1269,6 +1402,76 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update { current ->
                     current.copy(
                         mine = current.mine.withBookmarks(feed) {
+                            it.copy(isLoading = false, error = error.readableMessage())
+                        },
+                    )
+                }
+            }
+        }
+    }
+
+    fun loadMyBookmarkNovels(
+        feed: BookmarkFeed = BookmarkFeed.Public,
+        tag: String? = null,
+        refresh: Boolean = false,
+    ) {
+        val state = _uiState.value
+        val userId = state.session?.userId ?: return
+        val cleanTag = normalizeBookmarkTag(tag.orEmpty())
+        val currentFeed = state.mine.bookmarkNovels(feed)
+        val shouldRefresh = refresh || currentFeed.queryTag != cleanTag
+        if (currentFeed.isLoading) return
+
+        viewModelScope.launch {
+            _uiState.update { current ->
+                current.copy(
+                    mine = current.mine.withBookmarkNovels(feed) {
+                        it.copy(isLoading = true, error = null, queryTag = cleanTag)
+                    },
+                )
+            }
+            runCatching {
+                withAccessToken { token ->
+                    if (shouldRefresh) {
+                        val restrict = when (feed) {
+                            BookmarkFeed.Public -> BookmarkRestrict.Public
+                            BookmarkFeed.Private -> BookmarkRestrict.Private
+                        }
+                        repository.bookmarkedNovels(userId, token, restrict, cleanTag)
+                    } else {
+                        val nextUrl = _uiState.value.mine.bookmarkNovels(feed).nextUrl ?: return@withAccessToken null
+                        repository.nextNovelPage(nextUrl, token)
+                    }
+                }
+            }.onSuccess { page ->
+                if (page == null) {
+                    _uiState.update { current ->
+                        current.copy(
+                            mine = current.mine.withBookmarkNovels(feed) {
+                                it.copy(isLoading = false)
+                            },
+                        )
+                    }
+                    return@onSuccess
+                }
+                val filteredPage = page.filteredBy(excludedTags())
+                _uiState.update { current ->
+                    current.copy(
+                        mine = current.mine.withBookmarkNovels(feed) { old ->
+                            old.copy(
+                                items = if (shouldRefresh) filteredPage.items else old.items + filteredPage.items,
+                                nextUrl = filteredPage.nextUrl,
+                                isLoading = false,
+                                error = null,
+                                queryTag = cleanTag,
+                            )
+                        },
+                    )
+                }
+            }.onFailure { error ->
+                _uiState.update { current ->
+                    current.copy(
+                        mine = current.mine.withBookmarkNovels(feed) {
                             it.copy(isLoading = false, error = error.readableMessage())
                         },
                     )
@@ -1444,7 +1647,7 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
             val dnsResult = runCatching { repository.refreshDns() }
             val apiResult = runCatching { withAccessToken { repository.recommended(it) } }
             val probeUrl = apiResult.getOrNull()?.items?.firstOrNull()?.previewUrl
-                ?: _uiState.value.home.recommended.items.firstOrNull()?.previewUrl
+                ?: _uiState.value.home.illust.recommended.items.firstOrNull()?.previewUrl
             val imageResult = if (probeUrl != null) runCatching { repository.probeImage(probeUrl) } else null
 
             _uiState.update { state ->
@@ -1475,6 +1678,7 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
     fun search() {
         val state = _uiState.value
         val keyword = state.keyword.trim()
+        val kind = state.searchKind
         val sort = state.searchSort
         val target = state.searchTarget
         val startDate = state.searchStartDate.apiDateOrNull()
@@ -1492,6 +1696,7 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update {
             it.copy(
                 items = emptyList(),
+                searchUsers = emptyList(),
                 nextUrl = null,
                 isSearchActive = true,
                 isLoadingMore = false,
@@ -1499,21 +1704,34 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
         }
         viewModelScope.launch {
             runBusy {
-                val page = withAccessToken {
-                    repository.search(
-                        keyword = keyword,
-                        token = it,
-                        sort = sort,
-                        searchTarget = target,
-                        startDate = startDate,
-                        endDate = endDate,
-                        bookmarkNum = bookmarkNum,
-                    )
+                val result = withAccessToken { token ->
+                    when (kind) {
+                        SearchKind.Illust -> SearchResult.Works(
+                            repository.search(
+                                keyword = keyword,
+                                token = token,
+                                sort = sort,
+                                searchTarget = target,
+                                startDate = startDate,
+                                endDate = endDate,
+                                bookmarkNum = bookmarkNum,
+                            ).filteredBy(excludedTags()),
+                        )
+                        SearchKind.Novel -> SearchResult.Works(
+                            repository.searchNovels(
+                                keyword = keyword,
+                                token = token,
+                                sort = sort,
+                                searchTarget = target,
+                            ).filteredBy(excludedTags()),
+                        )
+                        SearchKind.User -> SearchResult.Users(repository.searchUsers(keyword, token))
+                    }
                 }
-                val filteredPage = page.filteredBy(excludedTags())
                 _uiState.update { current ->
                     if (
                         current.keyword.trim() != keyword ||
+                        current.searchKind != kind ||
                         current.searchSort != sort ||
                         current.searchTarget != target ||
                         current.searchStartDate.apiDateOrNull() != startDate ||
@@ -1522,12 +1740,22 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
                     ) {
                         current
                     } else {
-                        current.copy(
-                            items = filteredPage.items,
-                            nextUrl = filteredPage.nextUrl,
-                            isSearchActive = true,
-                            message = null,
-                        )
+                        when (result) {
+                            is SearchResult.Works -> current.copy(
+                                items = result.page.items,
+                                searchUsers = emptyList(),
+                                nextUrl = result.page.nextUrl,
+                                isSearchActive = true,
+                                message = null,
+                            )
+                            is SearchResult.Users -> current.copy(
+                                items = emptyList(),
+                                searchUsers = result.page.items,
+                                nextUrl = result.page.nextUrl,
+                                isSearchActive = true,
+                                message = null,
+                            )
+                        }
                     }
                 }
             }
@@ -1542,15 +1770,29 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             _uiState.update { it.copy(isLoadingMore = true, message = null) }
-            runCatching { withAccessToken { repository.nextPage(nextUrl, it) } }
-                .onSuccess { page ->
-                    val filteredPage = page.filteredBy(excludedTags())
+            runCatching {
+                withAccessToken {
+                    when (state.searchKind) {
+                        SearchKind.Illust -> SearchResult.Works(repository.nextPage(nextUrl, it).filteredBy(excludedTags()))
+                        SearchKind.Novel -> SearchResult.Works(repository.nextNovelPage(nextUrl, it).filteredBy(excludedTags()))
+                        SearchKind.User -> SearchResult.Users(repository.nextUserPage(nextUrl, it))
+                    }
+                }
+            }
+                .onSuccess { result ->
                     _uiState.update {
-                        it.copy(
-                            items = it.items + filteredPage.items,
-                            nextUrl = filteredPage.nextUrl,
-                            isLoadingMore = false,
-                        )
+                        when (result) {
+                            is SearchResult.Works -> it.copy(
+                                items = it.items + result.page.items,
+                                nextUrl = result.page.nextUrl,
+                                isLoadingMore = false,
+                            )
+                            is SearchResult.Users -> it.copy(
+                                searchUsers = it.searchUsers + result.page.items,
+                                nextUrl = result.page.nextUrl,
+                                isLoadingMore = false,
+                            )
+                        }
                     }
                 }
                 .onFailure { error ->
@@ -1582,6 +1824,7 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
         illustId: Long,
         restrict: BookmarkRestrict = BookmarkRestrict.Public,
         tags: List<String> = emptyList(),
+        isNovel: Boolean = false,
     ) {
         if (_uiState.value.session?.accessToken.isNullOrBlank()) {
             requireLogin()
@@ -1595,7 +1838,13 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             runBusy {
                 val cleanTags = normalizeBookmarkTags(tags)
-                withAccessToken { repository.addBookmark(illustId, it, restrict, cleanTags) }
+                withAccessToken {
+                    if (isNovel) {
+                        repository.addNovelBookmark(illustId, it, restrict, cleanTags)
+                    } else {
+                        repository.addBookmark(illustId, it, restrict, cleanTags)
+                    }
+                }
                 markIllustBookmarked(illustId, isBookmarked = true)
                 _uiState.update { state ->
                     if (state.selectedIllust?.id == illustId) {
@@ -1610,8 +1859,10 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
                         state
                     }
                 }
-                refreshMyBookmarkTagsAfterChange()
-                refreshMyBookmarksAfterChange(restrict, cleanTags)
+                if (!isNovel) {
+                    refreshMyBookmarkTagsAfterChange()
+                    refreshMyBookmarksAfterChange(restrict, cleanTags)
+                }
                 val typeLabel = if (restrict == BookmarkRestrict.Private) "私密收藏" else "公开收藏"
                 val tagsText = cleanTags.takeIf { it.isNotEmpty() }
                     ?.joinToString("、", prefix = " · 标签 ") { "#$it" }
@@ -1720,7 +1971,7 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun deleteBookmark(illustId: Long) {
+    fun deleteBookmark(illustId: Long, isNovel: Boolean = false) {
         if (_uiState.value.session?.accessToken.isNullOrBlank()) {
             requireLogin()
             return
@@ -1732,10 +1983,18 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             runBusy {
-                withAccessToken { repository.deleteBookmark(illustId, it) }
+                withAccessToken {
+                    if (isNovel) {
+                        repository.deleteNovelBookmark(illustId, it)
+                    } else {
+                        repository.deleteBookmark(illustId, it)
+                    }
+                }
                 markIllustBookmarked(illustId, isBookmarked = false)
                 _uiState.update { it.copy(selectedBookmark = SelectedBookmarkState()) }
-                refreshMyBookmarksAfterChange()
+                if (!isNovel) {
+                    refreshMyBookmarksAfterChange()
+                }
                 _uiState.update { it.copy(message = "已取消收藏") }
             }
         }
@@ -1745,28 +2004,31 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
         restrict: BookmarkRestrict = BookmarkRestrict.Public,
         tags: List<String> = emptyList(),
     ) {
-        val illustId = _uiState.value.selectedIllust?.id
-        if (illustId == null) {
+        val illust = _uiState.value.selectedIllust
+        if (illust == null) {
             _uiState.update { it.copy(message = "没有选中的作品") }
             return
         }
-        bookmarkIllust(illustId, restrict, tags)
+        val isNovel = illust.type.equals("novel", ignoreCase = true)
+        bookmarkIllust(illust.id, restrict, tags, isNovel = isNovel)
     }
 
     fun deleteSelectedBookmark() {
-        val illustId = _uiState.value.selectedIllust?.id
-        if (illustId == null) {
+        val illust = _uiState.value.selectedIllust
+        if (illust == null) {
             _uiState.update { it.copy(message = "没有选中的作品") }
             return
         }
-        deleteBookmark(illustId)
+        val isNovel = illust.type.equals("novel", ignoreCase = true)
+        deleteBookmark(illust.id, isNovel = isNovel)
     }
 
     fun toggleBookmark(illust: Illust) {
+        val isNovel = illust.type.equals("novel", ignoreCase = true)
         if (illust.isBookmarked) {
-            deleteBookmark(illust.id)
+            deleteBookmark(illust.id, isNovel = isNovel)
         } else {
-            bookmarkIllust(illust.id)
+            bookmarkIllust(illust.id, isNovel = isNovel)
         }
     }
 
@@ -1816,6 +2078,52 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         enqueueIllustDownload(illust)
+    }
+
+    fun downloadSelectedNovel() {
+        val illust = _uiState.value.selectedIllust
+        if (illust == null || !illust.type.equals("novel", ignoreCase = true)) {
+            _uiState.update { it.copy(message = "没有选中的小说") }
+            return
+        }
+        if (_uiState.value.session?.accessToken.isNullOrBlank()) {
+            requireLogin()
+            return
+        }
+        enqueueNovelDownload(illust)
+    }
+
+    fun enqueueNovelDownload(illust: Illust) {
+        val job = DownloadItem(
+            key = "novel-${illust.id}-${System.nanoTime()}",
+            illustId = illust.id,
+            title = illust.title,
+            illust = illust.copy(type = "novel"),
+            fileName = "${illust.safeFolderName()}.txt",
+            status = DownloadStatus.Queued,
+            isUgoira = false,
+            pageCount = 1,
+            relativePath = buildDownloadRelativePath(
+                rootDirectory = Environment.DIRECTORY_DOWNLOADS,
+                authorName = illust.authorName,
+                title = illust.title,
+            ),
+            detail = "等待下载小说正文",
+        )
+
+        _uiState.update { state ->
+            val downloads = state.downloads.copy(
+                items = listOf(job) + state.downloads.items.filterNot {
+                    it.illustId == illust.id && it.illust?.type.equals("novel", ignoreCase = true)
+                },
+            )
+            store.saveDownloads(downloads.items)
+            state.copy(
+                downloads = downloads,
+                message = "已加入小说下载队列",
+            )
+        }
+        startNovelDownload(job, illust)
     }
 
     fun enqueueIllustDownload(illust: Illust) {
@@ -1950,7 +2258,80 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun uploadNovel(
+        title: String,
+        caption: String,
+        text: String,
+        tags: List<String>,
+        visibilityScope: Int,
+        xRestrict: String,
+        isSexual: Boolean,
+        novelAiType: Int,
+        isOriginal: Boolean,
+        coverUri: Uri?,
+    ) {
+        if (_uiState.value.session?.accessToken.isNullOrBlank()) {
+            requireLogin()
+            return
+        }
+        if (title.isBlank()) {
+            _uiState.update { it.copy(message = "请输入小说标题") }
+            return
+        }
+        if (text.isBlank()) {
+            _uiState.update { it.copy(message = "请输入小说正文") }
+            return
+        }
+
+        viewModelScope.launch {
+            _uiState.update { state ->
+                state.copy(
+                    mine = state.mine.copy(isUploading = true, uploadStatus = "正在上传"),
+                    message = null,
+                )
+            }
+            runCatching {
+                val request = UploadNovelRequest(
+                    title = title.trim(),
+                    caption = caption.trim(),
+                    text = text,
+                    tags = tags.map { it.trim() }.filter { it.isNotBlank() }.distinct().take(10),
+                    visibilityScope = visibilityScope.coerceIn(1, 3),
+                    commentAccessControl = 0,
+                    xRestrict = xRestrict.takeIf { it == "r18" || it == "r18g" } ?: "none",
+                    isSexual = isSexual,
+                    novelAiType = novelAiType.coerceIn(1, 2),
+                    isOriginal = isOriginal,
+                    cover = coverUri?.let { listOf(it).toUploadParts(prefix = "cover").firstOrNull() },
+                )
+                withAccessToken { token -> repository.uploadNovel(token, request) }
+            }.onSuccess { response ->
+                val summary = response.novelId?.takeIf { it > 0L }?.let { "小说投稿成功：#$it" }
+                    ?: response.convertKey?.takeIf { it.isNotBlank() }?.let { "小说投稿处理中" }
+                    ?: "小说投稿已提交"
+                _uiState.update { state ->
+                    state.copy(
+                        mine = state.mine.copy(isUploading = false, uploadStatus = summary),
+                        message = summary,
+                    )
+                }
+                loadMyWorks(refresh = true)
+            }.onFailure { error ->
+                _uiState.update { state ->
+                    state.copy(
+                        mine = state.mine.copy(isUploading = false, uploadStatus = error.readableMessage()),
+                        message = error.readableMessage(),
+                    )
+                }
+            }
+        }
+    }
+
     fun openPreview(illust: Illust) {
+        if (illust.type.equals("novel", ignoreCase = true)) {
+            openNovelReader(illust)
+            return
+        }
         val state = _uiState.value
         val currentScreen = state.screen
         val returnScreen = currentScreen.takeIf { it != AppScreen.Preview } ?: state.previewReturnScreen
@@ -2086,6 +2467,209 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun openNovelReader(illust: Illust) {
+        val state = _uiState.value
+        val currentScreen = state.screen
+        val returnScreen = currentScreen.takeIf { it != AppScreen.NovelReader && it != AppScreen.Preview }
+            ?: state.previewReturnScreen
+        if (currentScreen != AppScreen.NovelReader) {
+            pushBackStack(returnScreen)
+        }
+        _uiState.update {
+            it.copy(
+                selectedIllust = illust,
+                novelReader = NovelReaderState(
+                    isLoading = true,
+                    detail = null,
+                    text = "",
+                    error = null,
+                    returnScreen = returnScreen,
+                ),
+                comments = CommentState(),
+                previewReturnScreen = returnScreen,
+                screen = AppScreen.NovelReader,
+                message = null,
+            )
+        }
+        saveHistory(illust)
+        loadNovelReader(illust.id)
+        loadComments(illust.id)
+    }
+
+    fun loadNovelReader(novelId: Long) {
+        if (novelId <= 0L) return
+        if (_uiState.value.session?.accessToken.isNullOrBlank()) {
+            requireLogin()
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(novelReader = it.novelReader.copy(isLoading = true, error = null))
+            }
+            runCatching {
+                withAccessToken { token ->
+                    val detail = repository.novelDetail(novelId, token)
+                    val payload = repository.novelText(novelId, token)
+                    detail to payload
+                }
+            }.onSuccess { (detail, payload) ->
+                if (_uiState.value.selectedIllust?.id != novelId) return@onSuccess
+                _uiState.update {
+                    it.copy(
+                        novelReader = it.novelReader.copy(
+                            isLoading = false,
+                            detail = detail,
+                            text = payload.text,
+                            uploadedImages = payload.uploadedImages,
+                            pixivImages = payload.pixivImages,
+                            error = null,
+                        ),
+                    )
+                }
+                markIllustBookmarked(novelId, isBookmarked = detail.isBookmarked)
+            }.onFailure { error ->
+                if (_uiState.value.selectedIllust?.id != novelId) return@onFailure
+                _uiState.update {
+                    it.copy(
+                        novelReader = it.novelReader.copy(
+                            isLoading = false,
+                            error = error.readableMessage(),
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    fun closeNovelReader() {
+        goBack()
+    }
+
+    fun openSeries(seriesId: Long, isNovel: Boolean = false, initialTitle: String = "") {
+        if (seriesId <= 0L) return
+        if (isNovel) return
+        if (_uiState.value.session?.accessToken.isNullOrBlank()) {
+            requireLogin()
+            return
+        }
+        val state = _uiState.value
+        val currentScreen = state.screen
+        val returnScreen = currentScreen.takeIf { it != AppScreen.Series }
+            ?: state.previewReturnScreen
+        if (currentScreen != AppScreen.Series) {
+            pushBackStack(returnScreen)
+        }
+        _uiState.update {
+            it.copy(
+                series = SeriesState(
+                    seriesId = seriesId,
+                    title = initialTitle,
+                    items = emptyList(),
+                    nextUrl = null,
+                    isLoading = true,
+                    error = null,
+                    returnScreen = returnScreen,
+                ),
+                screen = AppScreen.Series,
+                previewReturnScreen = returnScreen,
+                message = null,
+            )
+        }
+        loadSeries(refresh = true)
+    }
+
+    fun loadSeries(refresh: Boolean = false) {
+        val state = _uiState.value
+        val current = state.series
+        if (current.seriesId <= 0L) return
+        if (current.isLoading && !refresh) return
+        if (!refresh && current.nextUrl.isNullOrBlank() && current.items.isNotEmpty()) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(series = it.series.copy(isLoading = true, error = null)) }
+            runCatching {
+                withAccessToken { token ->
+                    if (refresh || current.items.isEmpty()) {
+                        repository.illustSeries(current.seriesId, token)
+                    } else {
+                        val next = _uiState.value.series.nextUrl ?: return@withAccessToken null
+                        repository.nextPage(next, token)
+                    }
+                }
+            }.onSuccess { page ->
+                if (page == null) {
+                    _uiState.update { it.copy(series = it.series.copy(isLoading = false)) }
+                    return@onSuccess
+                }
+                if (_uiState.value.series.seriesId != current.seriesId) return@onSuccess
+                _uiState.update {
+                    val merged = if (refresh) page.items else it.series.items + page.items
+                    val firstSeriesTitle = merged.firstNotNullOfOrNull { item -> item.seriesTitle?.takeIf { t -> t.isNotBlank() } }
+                    it.copy(
+                        series = it.series.copy(
+                            items = merged,
+                            nextUrl = page.nextUrl,
+                            title = it.series.title.ifBlank { firstSeriesTitle.orEmpty() },
+                            isLoading = false,
+                            error = null,
+                        ),
+                    )
+                }
+            }.onFailure { error ->
+                if (_uiState.value.series.seriesId != current.seriesId) return@onFailure
+                _uiState.update {
+                    it.copy(
+                        series = it.series.copy(
+                            isLoading = false,
+                            error = error.readableMessage(),
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    fun loadMoreSeries() {
+        loadSeries(refresh = false)
+    }
+
+    fun toggleNovelBookmark() {
+        val illust = _uiState.value.selectedIllust ?: return
+        if (!illust.type.equals("novel", ignoreCase = true)) return
+        if (_uiState.value.novelReader.isBookmarkBusy) return
+        if (_uiState.value.session?.accessToken.isNullOrBlank()) {
+            requireLogin()
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(novelReader = it.novelReader.copy(isBookmarkBusy = true)) }
+            runCatching {
+                withAccessToken { token ->
+                    if (illust.isBookmarked) {
+                        repository.deleteNovelBookmark(illust.id, token)
+                    } else {
+                        repository.addNovelBookmark(illust.id, token)
+                    }
+                }
+            }.onSuccess {
+                val nowBookmarked = !illust.isBookmarked
+                markIllustBookmarked(illust.id, isBookmarked = nowBookmarked)
+                _uiState.update {
+                    it.copy(
+                        novelReader = it.novelReader.copy(isBookmarkBusy = false),
+                        message = if (nowBookmarked) "已收藏小说" else "已取消收藏",
+                    )
+                }
+            }.onFailure { error ->
+                _uiState.update {
+                    it.copy(
+                        novelReader = it.novelReader.copy(isBookmarkBusy = false),
+                        message = error.readableMessage(),
+                    )
+                }
+            }
+        }
+    }
+
     fun openAuthor(illust: Illust) {
         val authorId = illust.authorId.takeIf { it > 0L } ?: run {
             _uiState.update { it.copy(message = "未找到作者信息") }
@@ -2188,11 +2772,16 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
                     if (refresh) {
                         when (tab) {
                             AuthorWorkTab.Bookmarks -> repository.bookmarkedIllusts(authorId, token)
+                            AuthorWorkTab.Novel -> repository.userNovels(authorId, token)
                             else -> repository.userWorks(authorId, token, tab.apiValue)
                         }
                     } else {
                         val nextUrl = _uiState.value.author.feed(tab).nextUrl ?: return@withAccessToken null
-                        repository.nextPage(nextUrl, token)
+                        if (tab == AuthorWorkTab.Novel) {
+                            repository.nextNovelPage(nextUrl, token)
+                        } else {
+                            repository.nextPage(nextUrl, token)
+                        }
                     }
                 }
             }.onSuccess { page ->
@@ -2324,11 +2913,15 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         if (state.comments.isSending) return
+        val isNovel = state.selectedIllust.type.equals("novel", ignoreCase = true)
 
         viewModelScope.launch {
             _uiState.update { it.copy(comments = it.comments.copy(isSending = true, error = null)) }
             runCatching {
-                withAccessToken { token -> repository.addComment(illustId, comment, token) }
+                withAccessToken { token ->
+                    if (isNovel) repository.addNovelComment(illustId, comment, token)
+                    else repository.addComment(illustId, comment, token)
+                }
             }.onSuccess {
                 _uiState.update {
                     it.copy(
@@ -2411,6 +3004,7 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
             val authorSnapshot = targetEntry?.author?.takeIf {
                 target == AppScreen.Author && state.author.userId != it.userId
             }
+            val seriesSnapshot = targetEntry?.series?.takeIf { target == AppScreen.Series }
             state.copy(
                 screen = target,
                 selectedIllust = when {
@@ -2438,6 +3032,12 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
                 previewReturnScreen = previewSnapshot?.returnScreen ?: state.previewReturnScreen,
                 isFullScreenPreview = if (previewSnapshot != null || current == AppScreen.Preview) false else state.isFullScreenPreview,
                 isPreviewLoading = if (previewSnapshot != null || current == AppScreen.Preview) false else state.isPreviewLoading,
+                novelReader = if (current == AppScreen.NovelReader && target != AppScreen.NovelReader) NovelReaderState() else state.novelReader,
+                series = when {
+                    seriesSnapshot != null -> seriesSnapshot
+                    current == AppScreen.Series && target != AppScreen.Series -> SeriesState()
+                    else -> state.series
+                },
                 message = null,
             )
         }
@@ -2643,10 +3243,16 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
         val state = _uiState.value
         if (state.session?.accessToken.isNullOrBlank()) return
         if (state.comments.isLoading) return
+        val isNovel = state.selectedIllust?.type?.equals("novel", ignoreCase = true) == true
 
         viewModelScope.launch {
             _uiState.update { it.copy(comments = it.comments.copy(isLoading = true, error = null)) }
-            runCatching { withAccessToken { token -> repository.comments(illustId, token) } }
+            runCatching {
+                withAccessToken { token ->
+                    if (isNovel) repository.novelComments(illustId, token)
+                    else repository.comments(illustId, token)
+                }
+            }
                 .onSuccess { page ->
                     if (_uiState.value.selectedIllust?.id != illustId) return@onSuccess
                     _uiState.update {
@@ -2779,6 +3385,53 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun startNovelDownload(item: DownloadItem, illust: Illust) {
+        viewModelScope.launch(Dispatchers.IO) {
+            updateDownload(item.key, persist = false) {
+                it.copy(status = DownloadStatus.Running, detail = "下载小说正文")
+            }
+            runCatching {
+                val currentReader = _uiState.value.novelReader
+                val text = currentReader.text.takeIf {
+                    _uiState.value.selectedIllust?.id == illust.id && it.isNotBlank()
+                } ?: withAccessToken { token ->
+                    repository.novelText(illust.id, token).text
+                }
+                val detail = currentReader.detail.takeIf { _uiState.value.selectedIllust?.id == illust.id }
+                val title = detail?.title?.takeIf { it.isNotBlank() } ?: illust.title
+                val author = detail?.authorName?.takeIf { it.isNotBlank() } ?: illust.authorName
+                val header = buildString {
+                    appendLine(title)
+                    author.takeIf { it.isNotBlank() }?.let { appendLine("作者：$it") }
+                    illust.createDate?.takeIf { it.isNotBlank() }?.take(10)?.let { appendLine("日期：$it") }
+                    appendLine()
+                }
+                val savedUri = saveDownloadBytes(
+                    item.relativePath,
+                    "${illust.safeFolderName()}.txt",
+                    (header + text).toByteArray(Charsets.UTF_8),
+                )
+                DownloadWriteResult(
+                    mainUri = savedUri,
+                    savedUris = listOf(savedUri.toString()),
+                )
+            }.onSuccess { result ->
+                updateDownload(item.key) {
+                    it.copy(
+                        status = DownloadStatus.Finished,
+                        detail = "小说正文已保存",
+                        savedUri = result.mainUri.toString(),
+                        savedUris = result.savedUris.ifEmpty { listOf(result.mainUri.toString()) },
+                    )
+                }
+            }.onFailure { error ->
+                updateDownload(item.key) {
+                    it.copy(status = DownloadStatus.Failed, detail = error.readableMessage())
+                }
+            }
+        }
+    }
+
     private fun updateDownload(
         key: String,
         persist: Boolean = true,
@@ -2852,7 +3505,7 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun saveHistory(illust: Illust) {
         viewModelScope.launch(Dispatchers.IO) {
-            historyStore.save(illust.id)
+            historyStore.save(historyStorageKey(illust))
             val accessToken = _uiState.value.session?.accessToken
             if (!accessToken.isNullOrBlank()) {
                 val entries = runCatching { historyStore.recentPage(limit = HISTORY_PAGE_SIZE, offset = 0) }.getOrDefault(emptyList())
@@ -2874,12 +3527,21 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun historyStorageKey(illust: Illust): Long =
+        if (illust.type.equals("novel", ignoreCase = true)) -illust.id else illust.id
+
     private suspend fun loadHistoryItems(entries: List<JunZi.Pixiv.data.local.HistoryEntry>, accessToken: String): List<HistoryItem> = coroutineScope {
         entries.map { entry ->
             async {
                 runCatching {
+                    val stored = entry.illustId
+                    val illust = if (stored < 0L) {
+                        repository.novelAsIllust(-stored, accessToken)
+                    } else {
+                        repository.detail(stored, accessToken)
+                    }
                     HistoryItem(
-                        illust = repository.detail(entry.illustId, accessToken),
+                        illust = illust,
                         viewedAtMillis = entry.viewedAtMillis,
                     )
                 }.getOrNull()
@@ -2911,16 +3573,31 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private suspend fun firstHomePage(
+        category: HomeCategory,
         feed: HomeFeed,
         token: String,
         rankingMode: RankingMode,
         rankingDate: String?,
     ): IllustPage {
-        return when (feed) {
-            HomeFeed.Walkthrough -> repository.walkthrough(token)
-            HomeFeed.Recommended -> repository.recommended(token)
-            HomeFeed.Ranking -> repository.ranking(token, rankingMode, rankingDate)
-            HomeFeed.Latest -> repository.latest(token)
+        return when (category) {
+            HomeCategory.Illust -> when (feed) {
+                HomeFeed.Walkthrough -> repository.walkthrough(token)
+                HomeFeed.Recommended -> repository.recommended(token)
+                HomeFeed.Ranking -> repository.ranking(token, rankingMode, rankingDate)
+                HomeFeed.Latest -> repository.latest(token)
+            }
+            HomeCategory.Manga -> when (feed) {
+                HomeFeed.Walkthrough -> repository.walkthrough(token)
+                HomeFeed.Recommended -> repository.recommendedManga(token)
+                HomeFeed.Ranking -> repository.ranking(token, rankingMode, rankingDate)
+                HomeFeed.Latest -> repository.latestManga(token)
+            }
+            HomeCategory.Novel -> when (feed) {
+                HomeFeed.Walkthrough -> repository.recommendedNovels(token)
+                HomeFeed.Recommended -> repository.recommendedNovels(token)
+                HomeFeed.Ranking -> repository.rankingNovels(token, rankingMode, rankingDate)
+                HomeFeed.Latest -> repository.latestNovels(token)
+            }
         }
     }
 
@@ -3016,7 +3693,7 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun List<Uri>.toUploadParts(): List<UploadImagePart> {
+    private fun List<Uri>.toUploadParts(prefix: String = "image"): List<UploadImagePart> {
         val resolver = getApplication<Application>().contentResolver
         return mapIndexed { index, uri ->
             val mimeType = resolver.getType(uri)?.takeIf { it.isNotBlank() } ?: "image/jpeg"
@@ -3030,7 +3707,7 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
             UploadImagePart(
                 bytes = bytes,
                 mimeType = mimeType,
-                fileName = "image_${index + 1}.$extension",
+                fileName = "${prefix}_${index + 1}.$extension",
             )
         }
     }
@@ -3071,6 +3748,9 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
             AppScreen.Author -> author.userId?.let {
                 NavigationEntry(screen = screen, author = author.navigationSnapshot())
             }
+            AppScreen.Series -> series.takeIf { it.seriesId > 0L }?.let {
+                NavigationEntry(screen = screen, series = it)
+            }
             else -> NavigationEntry(screen = screen)
         }
     }
@@ -3110,42 +3790,94 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
     }
 }
 
+private fun HomeState.categoryState(category: HomeCategory): HomeCategoryState {
+    return when (category) {
+        HomeCategory.Illust -> illust
+        HomeCategory.Manga -> manga
+        HomeCategory.Novel -> novel
+    }
+}
+
+private fun HomeState.withCategoryState(
+    category: HomeCategory,
+    transform: (HomeCategoryState) -> HomeCategoryState,
+): HomeState {
+    return when (category) {
+        HomeCategory.Illust -> copy(illust = transform(illust))
+        HomeCategory.Manga -> copy(manga = transform(manga))
+        HomeCategory.Novel -> copy(novel = transform(novel))
+    }
+}
+
 private fun HomeState.feed(feed: HomeFeed): FeedState {
+    return feed(category, feed)
+}
+
+private fun HomeState.feed(category: HomeCategory, feed: HomeFeed): FeedState {
+    if (feed == HomeFeed.Walkthrough) return walkthrough
+    val cat = categoryState(category)
     return when (feed) {
         HomeFeed.Walkthrough -> walkthrough
-        HomeFeed.Recommended -> recommended
-        HomeFeed.Ranking -> ranking
-        HomeFeed.Latest -> latest
+        HomeFeed.Recommended -> cat.recommended
+        HomeFeed.Ranking -> cat.ranking
+        HomeFeed.Latest -> cat.latest
     }
 }
 
 private fun HomeState.withFeed(feed: HomeFeed, transform: (FeedState) -> FeedState): HomeState {
-    return when (feed) {
-        HomeFeed.Walkthrough -> copy(walkthrough = transform(walkthrough))
-        HomeFeed.Recommended -> copy(recommended = transform(recommended))
-        HomeFeed.Ranking -> copy(ranking = transform(ranking))
-        HomeFeed.Latest -> copy(latest = transform(latest))
+    return withFeed(category, feed, transform)
+}
+
+private fun HomeState.withFeed(
+    category: HomeCategory,
+    feed: HomeFeed,
+    transform: (FeedState) -> FeedState,
+): HomeState {
+    if (feed == HomeFeed.Walkthrough) return copy(walkthrough = transform(walkthrough))
+    return withCategoryState(category) { cat ->
+        when (feed) {
+            HomeFeed.Walkthrough -> cat
+            HomeFeed.Recommended -> cat.copy(recommended = transform(cat.recommended))
+            HomeFeed.Ranking -> cat.copy(ranking = transform(cat.ranking))
+            HomeFeed.Latest -> cat.copy(latest = transform(cat.latest))
+        }
     }
 }
 
-private fun HomeState.withBookmarkState(illustId: Long, isBookmarked: Boolean): HomeState {
-    val updatedWalkthrough = walkthrough.withBookmarkState(illustId, isBookmarked)
+private fun HomeCategoryState.withBookmarkState(illustId: Long, isBookmarked: Boolean): HomeCategoryState {
     val updatedRecommended = recommended.withBookmarkState(illustId, isBookmarked)
     val updatedRanking = ranking.withBookmarkState(illustId, isBookmarked)
     val updatedLatest = latest.withBookmarkState(illustId, isBookmarked)
     if (
-        updatedWalkthrough === walkthrough &&
         updatedRecommended === recommended &&
         updatedRanking === ranking &&
         updatedLatest === latest
+    ) return this
+    return copy(
+        recommended = updatedRecommended,
+        ranking = updatedRanking,
+        latest = updatedLatest,
+    )
+}
+
+private fun HomeState.withBookmarkState(illustId: Long, isBookmarked: Boolean): HomeState {
+    val updatedWalkthrough = walkthrough.withBookmarkState(illustId, isBookmarked)
+    val updatedIllust = illust.withBookmarkState(illustId, isBookmarked)
+    val updatedManga = manga.withBookmarkState(illustId, isBookmarked)
+    val updatedNovel = novel.withBookmarkState(illustId, isBookmarked)
+    if (
+        updatedWalkthrough === walkthrough &&
+        updatedIllust === illust &&
+        updatedManga === manga &&
+        updatedNovel === novel
     ) {
         return this
     }
     return copy(
         walkthrough = updatedWalkthrough,
-        recommended = updatedRecommended,
-        ranking = updatedRanking,
-        latest = updatedLatest,
+        illust = updatedIllust,
+        manga = updatedManga,
+        novel = updatedNovel,
     )
 }
 
@@ -3187,6 +3919,23 @@ private fun MyState.withBookmarks(
     return when (feed) {
         BookmarkFeed.Public -> copy(bookmarks = transform(bookmarks))
         BookmarkFeed.Private -> copy(privateBookmarks = transform(privateBookmarks))
+    }
+}
+
+private fun MyState.bookmarkNovels(feed: BookmarkFeed): FeedState {
+    return when (feed) {
+        BookmarkFeed.Public -> bookmarkNovels
+        BookmarkFeed.Private -> privateBookmarkNovels
+    }
+}
+
+private fun MyState.withBookmarkNovels(
+    feed: BookmarkFeed,
+    transform: (FeedState) -> FeedState,
+): MyState {
+    return when (feed) {
+        BookmarkFeed.Public -> copy(bookmarkNovels = transform(bookmarkNovels))
+        BookmarkFeed.Private -> copy(privateBookmarkNovels = transform(privateBookmarkNovels))
     }
 }
 
@@ -3238,10 +3987,12 @@ private fun MyState.withBookmarkState(illustId: Long, isBookmarked: Boolean): My
 private fun AuthorState.withBookmarkState(illustId: Long, isBookmarked: Boolean): AuthorState {
     val updatedIllusts = illusts.withBookmarkState(illustId, isBookmarked)
     val updatedManga = manga.withBookmarkState(illustId, isBookmarked)
+    val updatedNovels = novels.withBookmarkState(illustId, isBookmarked)
     val updatedBookmarks = bookmarks.withBookmarkState(illustId, isBookmarked)
     if (
         updatedIllusts === illusts &&
         updatedManga === manga &&
+        updatedNovels === novels &&
         updatedBookmarks === bookmarks
     ) {
         return this
@@ -3249,6 +4000,7 @@ private fun AuthorState.withBookmarkState(illustId: Long, isBookmarked: Boolean)
     return copy(
         illusts = updatedIllusts,
         manga = updatedManga,
+        novels = updatedNovels,
         bookmarks = updatedBookmarks,
     )
 }
@@ -3257,6 +4009,7 @@ private fun AuthorState.feed(tab: AuthorWorkTab): FeedState {
     return when (tab) {
         AuthorWorkTab.Illust -> illusts
         AuthorWorkTab.Manga -> manga
+        AuthorWorkTab.Novel -> novels
         AuthorWorkTab.Bookmarks -> bookmarks
     }
 }
@@ -3265,6 +4018,7 @@ private fun AuthorState.withFeed(tab: AuthorWorkTab, transform: (FeedState) -> F
     return when (tab) {
         AuthorWorkTab.Illust -> copy(illusts = transform(illusts))
         AuthorWorkTab.Manga -> copy(manga = transform(manga))
+        AuthorWorkTab.Novel -> copy(novels = transform(novels))
         AuthorWorkTab.Bookmarks -> copy(bookmarks = transform(bookmarks))
     }
 }
@@ -3282,6 +4036,7 @@ private fun AuthorState.mergeProfile(profile: AuthorProfile): AuthorState {
         myPixivCount = profile.myPixivCount,
         totalIllusts = profile.totalIllusts,
         totalManga = profile.totalManga,
+        totalNovels = profile.totalNovels,
         totalBookmarks = profile.totalBookmarks,
     )
 }
@@ -3293,12 +4048,18 @@ private fun AuthorState.navigationSnapshot(): AuthorState {
         isFollowBusy = false,
         illusts = illusts.copy(isLoading = false),
         manga = manga.copy(isLoading = false),
+        novels = novels.copy(isLoading = false),
         bookmarks = bookmarks.copy(isLoading = false),
     )
 }
 
-private fun PuxivUiState.rankingRequestChanged(mode: RankingMode, date: String?): Boolean {
-    return rankingMode != mode || rankingDate.apiDateOrNull() != date
+private fun PuxivUiState.rankingRequestChanged(
+    category: HomeCategory,
+    mode: RankingMode,
+    date: String?,
+): Boolean {
+    val current = home.categoryState(category)
+    return home.category != category || current.rankingMode != mode || rankingDate.apiDateOrNull() != date
 }
 
 private fun String.apiDateOrNull(): String? {
@@ -3463,6 +4224,7 @@ private fun String.mimeType(): String {
         "webp" -> "image/webp"
         "gif" -> "image/gif"
         "zip" -> "application/zip"
+        "txt" -> "text/plain"
         else -> "image/jpeg"
     }
 }
