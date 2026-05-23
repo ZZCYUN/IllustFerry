@@ -11,8 +11,8 @@ android {
         applicationId = "JunZi.Pixiv"
         minSdk = 26
         targetSdk = 36
-        versionCode = 9
-        versionName = "1.1.1"
+        versionCode = 10
+        versionName = "1.1.2"
     }
 
     splits {
