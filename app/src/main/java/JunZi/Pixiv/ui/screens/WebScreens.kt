@@ -47,6 +47,7 @@ import JunZi.Pixiv.data.model.SearchTarget
 import JunZi.Pixiv.data.model.TrendingTag
 import JunZi.Pixiv.data.model.UgoiraFrameImage
 import JunZi.Pixiv.data.network.LocalPixivProxy
+import JunZi.Pixiv.data.network.OkHttpProvider
 import JunZi.Pixiv.data.network.PixivNetworkConfig
 import android.annotation.SuppressLint
 import android.content.Context
@@ -317,7 +318,6 @@ internal fun ProxiedPixivWebViewScreen(
     onInterceptUrl: (Uri, Boolean) -> Boolean = { _, _ -> false },
 ) {
     val context = LocalContext.current
-    val fallbackProxy = remember { LocalPixivProxy() }
     val mainExecutor = remember { Executor { command -> Handler(Looper.getMainLooper()).post(command) } }
     var useAppProxy by remember { mutableStateOf(true) }
     var proxyReady by remember { mutableStateOf(false) }
@@ -349,9 +349,6 @@ internal fun ProxiedPixivWebViewScreen(
         proxyReady = false
         activeProxyPort = 0
         if (useAppProxy) {
-            // 不在这里单独拉一次 DoH——DNS 由 PixivViewModel 在 init 时统一刷新写进
-            // PixivNetworkConfig.hostToIps，WebView 只是消费方。这里读 snapshot 只为给
-            // 用户一个"现在 hosts 表是不是空的"的视觉反馈，不触发任何网络。
             val snapshot = PixivNetworkConfig.snapshot()
             proxyStatus = when {
                 PixivNetworkConfig.isVpnActive ->
@@ -363,9 +360,7 @@ internal fun ProxiedPixivWebViewScreen(
                 else ->
                     "动态 hosts 已就绪（${snapshot.size} 项），内置代理准备中"
             }
-            fallbackProxy.stop()
-            fallbackProxy.start()
-            val proxyPort = fallbackProxy.port
+            val proxyPort = OkHttpProvider.ensureApiProxyRunning()
             activeProxyPort = proxyPort
             if (WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) {
                 val proxyConfig = ProxyConfig.Builder()
@@ -382,7 +377,6 @@ internal fun ProxiedPixivWebViewScreen(
             }
         } else {
             proxyStatus = "直连准备中"
-            fallbackProxy.stop()
             if (WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) {
                 ProxyController.getInstance().clearProxyOverride(mainExecutor) {
                     proxyReady = true
@@ -398,7 +392,6 @@ internal fun ProxiedPixivWebViewScreen(
             if (WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) {
                 ProxyController.getInstance().clearProxyOverride(mainExecutor) {}
             }
-            fallbackProxy.stop()
         }
     }
 
@@ -434,10 +427,9 @@ internal fun ProxiedPixivWebViewScreen(
                             ) {
                                 // 放弃校验：本地代理用的是进程内一次性 CA，反正 WebView 也不会主动信任。
                                 // 与其纠结签发链，不如全放过；想抓包就抓，不在威胁模型里。
-                                fallbackProxy.noteWebViewEvent(
+                                LocalPixivProxy.lastProxyEvent =
                                     "ssl proceed host=${error?.url?.toUri()?.host} " +
-                                        "primary=${error?.primaryError} trust-all",
-                                )
+                                        "primary=${error?.primaryError} trust-all"
                                 handler?.proceed()
                             }
 
@@ -463,9 +455,8 @@ internal fun ProxiedPixivWebViewScreen(
                                 // 在这里冒出来都和"页面能不能看"无关，悄悄记到诊断里就行，不要刷顶部状态吓用户。
                                 val isMainFrame = request?.isForMainFrame == true
                                 val description = error?.description?.toString().orEmpty()
-                                fallbackProxy.noteWebViewEvent(
-                                    "resource-error main=$isMainFrame url=${request?.url} desc=$description",
-                                )
+                                LocalPixivProxy.lastProxyEvent =
+                                    "resource-error main=$isMainFrame url=${request?.url} desc=$description"
                                 if (isMainFrame) {
                                     proxyStatus = "加载失败：${description.ifBlank { "未知错误" }}"
                                 }

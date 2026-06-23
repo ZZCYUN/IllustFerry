@@ -37,6 +37,7 @@ import JunZi.Pixiv.data.model.UploadNovelRequest
 import JunZi.Pixiv.data.model.UgoiraFrameImage
 import JunZi.Pixiv.data.model.UserPreview
 import JunZi.Pixiv.data.model.UserPreviewPage
+import JunZi.Pixiv.data.network.OkHttpProvider
 import JunZi.Pixiv.data.network.PixivApiException
 import JunZi.Pixiv.data.network.PixivImageProxy
 import JunZi.Pixiv.data.network.PixivNetworkConfig
@@ -97,6 +98,7 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
         PixivNetworkConfig.isVpnActive = isVpnActive()
         PixivNetworkConfig.replaceAll(store.readDynamicHostIps())
         PixivImageProxy.useRemoteProxy = useRemoteImageProxy
+        OkHttpProvider.ensureApiProxyRunning()
         _uiState.update {
             it.copy(
                 session = session,
@@ -121,7 +123,7 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
         viewModelScope.launch {
-            if (PixivNetworkConfig.shouldUseCompatibilityClient()) warmupDnsIfNeeded(forceRefresh = true)
+            warmupDnsIfNeeded(forceRefresh = true)
             loadHome(refresh = false)
         }
         registerNetworkCallback()

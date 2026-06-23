@@ -6,8 +6,8 @@ IllustFerry（画渡）是一个面向 pixiv 的非官方 Android 客户端实�
 
 ## 功能
 
-- 登录：应用内 WebView OAuth 登录代理、手动 token 登录、运行时生成内存 CA，不分发固定代理证书。
-- 网络兼容：pixiv 相关 Host 的内置 IP、备用 IP、DNS 刷新、API Host/IP 兼容路由，以及图片直连 / 备用 Host / 远端图片代理 fallback。
+- 登录：应用内 WebView OAuth 登录代理、手动 token 登录，运行时生成内存 CA，不分发固定代理证书。
+- 网络兼容：所有 pixiv 域名请求统一走内置 7891 中间人代理（MITM），通过 DoH 端点实时刷新可用 IP 并过滤无效地址，图片直连 / 备用 Host / 远端图片代理 fallback。
 - 首页：插画、漫画、小说分栏浏览，支持推荐、排行榜、最新作品和搜索入口。
 - 发现：公开关注作品、悄悄关注作品、趋势标签、标签/标题/作者/小说搜索、热门预览、搜索结果分页自动加载，并可从搜索结果返回关注作品列表。
 - 搜索筛选：搜索目标、排序方式、日期范围、收藏数阈值等参数会随搜索刷新。
@@ -24,10 +24,10 @@ IllustFerry（画渡）是一个面向 pixiv 的非官方 Android 客户端实�
 
 网络层是本项目的核心：
 
-- `LocalPixivProxy`：应用内 WebView 登录代理 / 浏览代理。
-- `PixivHost` / `PixivNetworkConfig`：pixiv Host 与运行时 IP 配置。
+- `LocalPixivProxy`：进程内 7891 中间人代理（MITM），统一承接 OkHttp 与 WebView 的 pixiv 域名流量，对域名解析敏感的上游做无 SNI 握手兜底。
+- `OkHttpProvider`：API / 图片 OkHttpClient 统一挂载内置 MITM 代理，不再做 host→IP 改写拦截。
+- `PixivHost` / `PixivNetworkConfig`：pixiv Host 清单与运行时 IP 配置，写入时过滤环回 / 私有 / 保留等无效地址，避免污染记录进表。
 - `PixivDnsUpdater`：通过外部 DoH 端点实时刷新可用 IP。
-- `PixivDns` / `OkHttpProvider`：让 OkHttp 请求使用项目内 Host/IP 配置。
 - `PixivImageProxy`：处理图片直连、备用 Host、默认远端代理与手动代理候选。
 - `PixivUnsafeTls`：为兼容路径放宽证书与 Hostname 校验。
 

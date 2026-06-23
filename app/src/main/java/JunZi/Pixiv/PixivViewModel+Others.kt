@@ -204,8 +204,6 @@ internal suspend fun PixivViewModel.refreshSession(session: AuthSession): AuthSe
     return refreshed
 }
 internal suspend fun PixivViewModel.warmupDnsIfNeeded(forceRefresh: Boolean = false) {
-    if (!_uiState.value.useHostIpRouting) return
-    if (PixivNetworkConfig.isVpnActive) return
     if (!forceRefresh && dnsWarmupAttempted && PixivNetworkConfig.hasAddressFor(APP_API_HOST)) return
     dnsWarmupMutex.withLock {
         if (!forceRefresh && dnsWarmupAttempted && PixivNetworkConfig.hasAddressFor(APP_API_HOST)) return

@@ -38,7 +38,6 @@ class PixivApiClient(
     private val apiClient = OkHttpProvider.apiClient()
     private val directClient = OkHttpProvider.directClient()
     private val imageClient = OkHttpProvider.imageClient()
-    private val cleanClient = OkHttpProvider.cleanClient()
 
     suspend fun exchangeCode(
         code: String,
@@ -743,9 +742,7 @@ class PixivApiClient(
 
     private fun currentApiClient(): okhttp3.OkHttpClient = OkHttpProvider.currentApiClient()
 
-    private fun currentImageClient(): okhttp3.OkHttpClient {
-        return if (PixivNetworkConfig.shouldUseCompatibilityClient()) imageClient else cleanClient
-    }
+    private fun currentImageClient(): okhttp3.OkHttpClient = imageClient
 
     private fun <T> Response.parse(type: Class<T>): T {
         val payload = body.string()

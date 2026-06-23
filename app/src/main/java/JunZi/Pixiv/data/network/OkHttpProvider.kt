@@ -1,33 +1,56 @@
 package JunZi.Pixiv.data.network
 
-import okhttp3.Interceptor
 import okhttp3.Call
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import java.io.IOException
+import java.net.InetSocketAddress
+import java.net.Proxy
 import java.util.concurrent.TimeUnit
 
 object OkHttpProvider {
-    private val baseBuilder: OkHttpClient.Builder
-        get() = OkHttpClient.Builder()
+    private val apiProxy = LocalPixivProxy()
+
+    fun ensureApiProxyRunning(): Int {
+        apiProxy.start()
+        return apiProxy.port
+    }
+
+    fun stopApiProxy() = apiProxy.stop()
+
+    private val proxyPort: Int
+        get() {
+            ensureApiProxyRunning()
+            return apiProxy.port
+        }
+
+    private fun apiProxy(): Proxy = Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", proxyPort))
+
+    private val proxySslFactory: javax.net.ssl.SSLSocketFactory by lazy {
+        val ctx = javax.net.ssl.SSLContext.getInstance("TLS")
+        ctx.init(null, arrayOf(PixivUnsafeTls.trustManager), java.security.SecureRandom())
+        ctx.socketFactory
+    }
+
+    private val apiClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
             .connectTimeout(20, TimeUnit.SECONDS)
             .readTimeout(40, TimeUnit.SECONDS)
             .writeTimeout(40, TimeUnit.SECONDS)
-            .dns(PixivDns())
-            .sslSocketFactory(PixivUnsafeTls.socketFactory(), PixivUnsafeTls.trustManager)
+            .proxy(apiProxy())
+            .sslSocketFactory(proxySslFactory, PixivUnsafeTls.trustManager)
             .hostnameVerifier(PixivUnsafeTls.hostnameVerifier)
-
-    private val apiClient: OkHttpClient by lazy {
-        baseBuilder
-            .addInterceptor(ApiDirectInterceptor)
+            .addInterceptor(ApiHeadersInterceptor)
             .build()
     }
 
     private val imageClient: OkHttpClient by lazy {
-        baseBuilder
+        OkHttpClient.Builder()
             .connectTimeout(20, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
             .writeTimeout(60, TimeUnit.SECONDS)
+            .proxy(apiProxy())
+            .sslSocketFactory(proxySslFactory, PixivUnsafeTls.trustManager)
+            .hostnameVerifier(PixivUnsafeTls.hostnameVerifier)
             .addInterceptor(ImageProxyInterceptor)
             .build()
     }
@@ -40,14 +63,6 @@ object OkHttpProvider {
             .build()
     }
 
-    private val cleanClient: OkHttpClient by lazy {
-        OkHttpClient.Builder()
-            .connectTimeout(20, TimeUnit.SECONDS)
-            .readTimeout(60, TimeUnit.SECONDS)
-            .writeTimeout(60, TimeUnit.SECONDS)
-            .build()
-    }
-
     @JvmStatic
     fun apiClient(): OkHttpClient = apiClient
 
@@ -56,11 +71,9 @@ object OkHttpProvider {
 
     fun directClient(): OkHttpClient = directClient
 
-    fun cleanClient(): OkHttpClient = cleanClient
+    fun currentApiClient(): OkHttpClient = apiClient
 
-    fun currentApiClient(): OkHttpClient = if (PixivNetworkConfig.shouldUseCompatibilityClient()) apiClient else cleanClient
-
-    fun currentImageClient(): OkHttpClient = if (PixivNetworkConfig.shouldUseCompatibilityClient()) imageClient else cleanClient
+    fun currentImageClient(): OkHttpClient = imageClient
 
     @JvmStatic
     fun imageCallFactory(): Call.Factory = CurrentImageCallFactory
@@ -71,30 +84,21 @@ object OkHttpProvider {
         }
     }
 
-    private object ApiDirectInterceptor : Interceptor {
-        override fun intercept(chain: Interceptor.Chain): okhttp3.Response {
+    private object ApiHeadersInterceptor : okhttp3.Interceptor {
+        override fun intercept(chain: okhttp3.Interceptor.Chain): okhttp3.Response {
             val request = chain.request()
-            val originalHost = request.url.host
-            val pixivHost = PixivHost.from(originalHost)
-
+            val pixivHost = PixivHost.from(request.url.host)
             val builder = request.newBuilder()
-            if (pixivHost?.isApiHost == true) {
-                val ip = PixivNetworkConfig.ipFor(originalHost)
-                    ?: throw IOException("No dynamic IP for $originalHost; request blocked until API route is ready")
-                if (ip != originalHost) {
-                    builder.url(request.url.newBuilder().host(ip).build())
-                }
-            }
             PixivHeaders.addAppHeaders(builder, pixivHost?.takeIf { it.isApiHost }?.rawHost)
             return chain.proceed(builder.build())
         }
     }
 
-    private object ImageProxyInterceptor : Interceptor {
-        override fun intercept(chain: Interceptor.Chain): okhttp3.Response {
+    private object ImageProxyInterceptor : okhttp3.Interceptor {
+        override fun intercept(chain: okhttp3.Interceptor.Chain): okhttp3.Response {
             val request = chain.request()
             val candidates = PixivImageProxy.candidateUrls(request.url)
-            var lastFailure: IOException? = null
+            var lastFailure: java.io.IOException? = null
 
             candidates.forEachIndexed { index, url ->
                 val candidateRequest = request.newBuilder()
@@ -106,7 +110,7 @@ object OkHttpProvider {
 
                 val response = try {
                     chain.proceed(candidateRequest)
-                } catch (error: IOException) {
+                } catch (error: java.io.IOException) {
                     lastFailure = error
                     return@forEachIndexed
                 }
@@ -118,7 +122,7 @@ object OkHttpProvider {
                 response.close()
             }
 
-            throw lastFailure ?: IOException("Pixiv image request failed without a response")
+            throw lastFailure ?: java.io.IOException("Pixiv image request failed without a response")
         }
 
         private fun okhttp3.Response.shouldRetryImage(): Boolean {

@@ -8,6 +8,7 @@ import JunZi.Pixiv.PuxivCustomPalette
 import JunZi.Pixiv.PuxivThemeMode
 import JunZi.Pixiv.PuxivThemePalette
 import JunZi.Pixiv.data.model.AuthSession
+import JunZi.Pixiv.data.network.PixivNetworkConfig
 import androidx.core.content.edit
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
@@ -111,7 +112,7 @@ class TokenStore(context: Context) {
                 .mapValues { (_, ips) ->
                     ips.orEmpty()
                         .map { it.trim() }
-                        .filter { IPV4_PATTERN.matches(it) }
+                        .filter { PixivNetworkConfig.isValidPublicIpv4(it) }
                         .distinct()
                 }
                 .filter { (host, ips) -> host.isNotBlank() && ips.isNotEmpty() }
@@ -123,7 +124,7 @@ class TokenStore(context: Context) {
             .mapKeys { (host, _) -> host.trim().lowercase().removeSuffix(".") }
             .mapValues { (_, ips) ->
                 ips.map { it.trim() }
-                    .filter { IPV4_PATTERN.matches(it) }
+                    .filter { PixivNetworkConfig.isValidPublicIpv4(it) }
                     .distinct()
             }
             .filter { (host, ips) -> host.isNotBlank() && ips.isNotEmpty() }
@@ -260,7 +261,6 @@ class TokenStore(context: Context) {
         const val MAX_STORED_DOWNLOADS = 200
         val DOWNLOAD_LIST_TYPE = object : TypeToken<List<DownloadItem?>>() {}.type
         val HOST_IPS_TYPE = object : TypeToken<Map<String, List<String>?>>() {}.type
-        val IPV4_PATTERN = Regex("""\d{1,3}(\.\d{1,3}){3}""")
     }
 }
 

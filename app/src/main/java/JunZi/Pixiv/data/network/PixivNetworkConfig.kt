@@ -15,7 +15,7 @@ object PixivNetworkConfig {
     @Volatile
     var isVpnActive: Boolean = false
 
-    fun shouldUseCompatibilityClient(): Boolean = useHostIpRouting && !isVpnActive
+    fun shouldUseCompatibilityClient(): Boolean = true
 
     fun ipFor(host: String?): String? {
         if (!shouldUseCompatibilityClient()) return null
@@ -42,7 +42,7 @@ object PixivNetworkConfig {
 
     fun update(host: PixivHost, ips: List<String>) {
         val cleaned = ips.map { it.trim() }
-            .filter { IPV4_REGEX.matches(it) }
+            .filter { isValidPublicIpv4(it) }
             .distinct()
         if (cleaned.isNotEmpty()) {
             hostToIps[host.rawHost] = cleaned
@@ -54,7 +54,7 @@ object PixivNetworkConfig {
         hostIps.forEach { (host, ips) ->
             val normalized = host.trim().lowercase().removeSuffix(".")
             val cleaned = ips.map { it.trim() }
-                .filter { IPV4_REGEX.matches(it) }
+                .filter { isValidPublicIpv4(it) }
                 .distinct()
             if (normalized.isNotBlank() && cleaned.isNotEmpty()) {
                 hostToIps[normalized] = cleaned
@@ -82,4 +82,29 @@ object PixivNetworkConfig {
         .mapValues { (_, ips) -> ips.toList() }
 
     private val IPV4_REGEX = Regex("""\d{1,3}(\.\d{1,3}){3}""")
+
+    /**
+     * 校验 IPv4 字面量且拒绝 bogon 段。DNS 源（api.sb6.me）偶尔会被 GFW 投毒返回
+     * 127.0.0.1 / 0.0.0.0 这类地址，若原样进表，LocalPixivProxy 上游拨号就会拨到
+     * 127.0.0.1:443 触发 ECONNREFUSED。pixiv 的 Tokyo 源站都是公网 IP，过滤 bogon
+     * 不会误伤真实候选。
+     */
+    fun isValidPublicIpv4(ip: String): Boolean {
+        if (!IPV4_REGEX.matches(ip)) return false
+        val octets = ip.split('.')
+        if (octets.size != 4 || octets.any { it.toIntOrNull() !in 0..255 }) return false
+        val first = octets[0].toInt()
+        val second = octets[1].toInt()
+        return when {
+            first == 0 -> false                       // 0.0.0.0/8
+            first == 10 -> false                      // 10.0.0.0/8
+            first == 127 -> false                     // 127.0.0.0/8 loopback
+            first == 169 && second == 254 -> false    // 169.254.0.0/16 link-local
+            first == 172 && second in 16..31 -> false // 172.16.0.0/12 private
+            first == 192 && second == 168 -> false    // 192.168.0.0/16 private
+            first in 224..239 -> false                // 224.0.0.0/4 multicast
+            first in 240..255 -> false                // 240.0.0.0/4 reserved + 255.255.255.255
+            else -> true
+        }
+    }
 }
