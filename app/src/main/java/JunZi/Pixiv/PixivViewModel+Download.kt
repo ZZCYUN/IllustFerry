@@ -1,75 +1,31 @@
 package JunZi.Pixiv
 
 import android.app.Application
-import android.content.ContentValues
-import android.content.Context
-import android.net.ConnectivityManager
-import android.net.Network
-import android.net.NetworkCapabilities
-import android.net.NetworkRequest
 import android.net.Uri
-import android.os.Build
 import android.os.Environment
-import android.provider.MediaStore
-import androidx.compose.runtime.Immutable
-import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import JunZi.Pixiv.data.PixivRepository
-import JunZi.Pixiv.data.auth.OAuthPkce
-import JunZi.Pixiv.data.auth.TokenStore
-import JunZi.Pixiv.data.local.HistoryStore
-import JunZi.Pixiv.data.model.AuthSession
-import JunZi.Pixiv.data.model.AuthorProfile
-import JunZi.Pixiv.data.model.BookmarkRestrict
-import JunZi.Pixiv.data.model.BookmarkTag
-import JunZi.Pixiv.data.model.HomeCategory
 import JunZi.Pixiv.data.model.Illust
-import JunZi.Pixiv.data.model.IllustComment
-import JunZi.Pixiv.data.model.IllustPage
-import JunZi.Pixiv.data.model.NovelDetail
-import JunZi.Pixiv.data.model.RankingMode
-import JunZi.Pixiv.data.model.SearchSort
-import JunZi.Pixiv.data.model.SearchTarget
-import JunZi.Pixiv.data.model.TrendingTag
 import JunZi.Pixiv.data.model.UploadIllustRequest
-import JunZi.Pixiv.data.model.UploadImagePart
 import JunZi.Pixiv.data.model.UploadNovelRequest
-import JunZi.Pixiv.data.model.UgoiraFrameImage
-import JunZi.Pixiv.data.model.UserPreview
-import JunZi.Pixiv.data.model.UserPreviewPage
-import JunZi.Pixiv.data.network.PixivApiException
-import JunZi.Pixiv.data.network.PixivImageProxy
-import JunZi.Pixiv.data.network.PixivNetworkConfig
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.io.File
-import java.util.Locale
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 
 internal fun PixivViewModel.downloadSelectedIllust() {
-    val illust = _uiState.value.selectedIllust
+    val illust = _previewState.value.selectedIllust
     if (illust == null) {
-        _uiState.update { it.copy(message = "没有选中的作品") }
+        showMessage("没有选中的作品")
         return
     }
     enqueueIllustDownload(illust)
 }
 internal fun PixivViewModel.downloadSelectedNovel() {
-    val illust = _uiState.value.selectedIllust
+    val illust = _previewState.value.selectedIllust
     if (illust == null || !illust.type.equals("novel", ignoreCase = true)) {
-        _uiState.update { it.copy(message = "没有选中的小说") }
+        showMessage("没有选中的小说")
         return
     }
-    if (_uiState.value.session?.accessToken.isNullOrBlank()) {
+    if (_authState.value.session?.accessToken.isNullOrBlank()) {
         requireLogin()
         return
     }
@@ -93,33 +49,31 @@ internal fun PixivViewModel.enqueueNovelDownload(illust: Illust) {
         detail = "等待下载小说正文",
     )
 
-    _uiState.update { state ->
+    _mineState.update { state ->
         val downloads = state.downloads.copy(
             items = listOf(job) + state.downloads.items.filterNot {
                 it.illustId == illust.id && it.illust?.type.equals("novel", ignoreCase = true)
             },
         )
         store.saveDownloads(downloads.items)
-        state.copy(
-            downloads = downloads,
-            message = "已加入小说下载队列",
-        )
+        state.copy(downloads = downloads)
     }
+    showMessage("已加入小说下载队列")
     startNovelDownload(job, illust)
 }
 internal fun PixivViewModel.enqueueIllustDownload(illust: Illust) {
     val requiresAuth = illust.isUgoira
-    if (requiresAuth && _uiState.value.session?.accessToken.isNullOrBlank()) {
+    if (requiresAuth && _authState.value.session?.accessToken.isNullOrBlank()) {
         requireLogin()
         return
     }
     val pages = illust.imageUrls.ifEmpty { listOfNotNull(illust.previewUrl) }
     if (!illust.isUgoira && pages.isEmpty()) {
-        _uiState.update { it.copy(message = "没有可下载的图片地址") }
+        showMessage("没有可下载的图片地址")
         return
     }
 
-    val ugoiraFormat = _uiState.value.ugoiraSaveFormat
+    val ugoiraFormat = _settingsState.value.ugoiraSaveFormat
     val job = DownloadItem(
         key = "${illust.id}-${System.nanoTime()}",
         illustId = illust.id,
@@ -148,27 +102,23 @@ internal fun PixivViewModel.enqueueIllustDownload(illust: Illust) {
         detail = if (illust.isUgoira) "等待合成 ${ugoiraFormat.name}" else "等待下载 ${pages.size} 张",
     )
 
-    _uiState.update { state ->
+    _mineState.update { state ->
         val downloads = state.downloads.copy(items = listOf(job) + state.downloads.items.filterNot { it.illustId == illust.id })
         store.saveDownloads(downloads.items)
-        state.copy(
-            downloads = downloads,
-            message = "已加入下载队列",
-        )
+        state.copy(downloads = downloads)
     }
+    showMessage("已加入下载队列")
     startDownload(job, illust)
 }
 internal fun PixivViewModel.deleteDownloadItem(key: String) {
-    _uiState.update { state ->
+    _mineState.update { state ->
         val downloads = state.downloads.copy(
             items = state.downloads.items.filterNot { it.key == key },
         )
         store.saveDownloads(downloads.items)
-        state.copy(
-            downloads = downloads,
-            message = "已删除下载记录",
-        )
+        state.copy(downloads = downloads)
     }
+    showMessage("已删除下载记录")
 }
 internal fun PixivViewModel.uploadIllust(
     title: String,
@@ -181,26 +131,24 @@ internal fun PixivViewModel.uploadIllust(
     illustAiType: Int,
     imageUris: List<Uri>,
 ) {
-    if (_uiState.value.session?.accessToken.isNullOrBlank()) {
+    if (_authState.value.session?.accessToken.isNullOrBlank()) {
         requireLogin()
         return
     }
     if (title.isBlank()) {
-        _uiState.update { it.copy(message = "请输入作品标题") }
+        showMessage("请输入作品标题")
         return
     }
     if (imageUris.isEmpty()) {
-        _uiState.update { it.copy(message = "请至少选择一张图片") }
+        showMessage("请至少选择一张图片")
         return
     }
 
     viewModelScope.launch {
-        _uiState.update { state ->
-            state.copy(
-                mine = state.mine.copy(isUploading = true, uploadStatus = "正在上传"),
-                message = null,
-            )
+        _mineState.update { state ->
+            state.copy(mine = state.mine.copy(isUploading = true, uploadStatus = "正在上传"))
         }
+        showMessage(null)
         runCatching {
             val request = UploadIllustRequest(
                 title = title.trim(),
@@ -219,20 +167,16 @@ internal fun PixivViewModel.uploadIllust(
             val summary = status.illustId?.takeIf { it > 0L }?.let { "投稿成功：#$it" }
                 ?: status.status?.takeIf { it.isNotBlank() }?.let { "投稿处理中：$it" }
                 ?: "投稿已提交"
-            _uiState.update { state ->
-                state.copy(
-                    mine = state.mine.copy(isUploading = false, uploadStatus = summary),
-                    message = summary,
-                )
+            _mineState.update { state ->
+                state.copy(mine = state.mine.copy(isUploading = false, uploadStatus = summary))
             }
+            showMessage(summary)
             loadMyWorks(refresh = true)
         }.onFailure { error ->
-            _uiState.update { state ->
-                state.copy(
-                    mine = state.mine.copy(isUploading = false, uploadStatus = error.readableMessage()),
-                    message = error.readableMessage(),
-                )
+            _mineState.update { state ->
+                state.copy(mine = state.mine.copy(isUploading = false, uploadStatus = error.readableMessage()))
             }
+            showMessage(error.readableMessage())
         }
     }
 }
@@ -248,26 +192,24 @@ internal fun PixivViewModel.uploadNovel(
     isOriginal: Boolean,
     coverUri: Uri?,
 ) {
-    if (_uiState.value.session?.accessToken.isNullOrBlank()) {
+    if (_authState.value.session?.accessToken.isNullOrBlank()) {
         requireLogin()
         return
     }
     if (title.isBlank()) {
-        _uiState.update { it.copy(message = "请输入小说标题") }
+        showMessage("请输入小说标题")
         return
     }
     if (text.isBlank()) {
-        _uiState.update { it.copy(message = "请输入小说正文") }
+        showMessage("请输入小说正文")
         return
     }
 
     viewModelScope.launch {
-        _uiState.update { state ->
-            state.copy(
-                mine = state.mine.copy(isUploading = true, uploadStatus = "正在上传"),
-                message = null,
-            )
+        _mineState.update { state ->
+            state.copy(mine = state.mine.copy(isUploading = true, uploadStatus = "正在上传"))
         }
+        showMessage(null)
         runCatching {
             val request = UploadNovelRequest(
                 title = title.trim(),
@@ -287,20 +229,16 @@ internal fun PixivViewModel.uploadNovel(
             val summary = response.novelId?.takeIf { it > 0L }?.let { "小说投稿成功：#$it" }
                 ?: response.convertKey?.takeIf { it.isNotBlank() }?.let { "小说投稿处理中" }
                 ?: "小说投稿已提交"
-            _uiState.update { state ->
-                state.copy(
-                    mine = state.mine.copy(isUploading = false, uploadStatus = summary),
-                    message = summary,
-                )
+            _mineState.update { state ->
+                state.copy(mine = state.mine.copy(isUploading = false, uploadStatus = summary))
             }
+            showMessage(summary)
             loadMyWorks(refresh = true)
         }.onFailure { error ->
-            _uiState.update { state ->
-                state.copy(
-                    mine = state.mine.copy(isUploading = false, uploadStatus = error.readableMessage()),
-                    message = error.readableMessage(),
-                )
+            _mineState.update { state ->
+                state.copy(mine = state.mine.copy(isUploading = false, uploadStatus = error.readableMessage()))
             }
+            showMessage(error.readableMessage())
         }
     }
 }
@@ -315,9 +253,9 @@ internal fun PixivViewModel.startDownload(item: DownloadItem, illust: Illust) {
                     repository.downloadUgoira(
                         id = illust.id,
                         token = token,
-                        includeZip = _uiState.value.saveUgoiraZip,
+                        includeZip = _settingsState.value.saveUgoiraZip,
                         workingDirectory = getApplication<Application>().cacheDir,
-                        saveFormat = _uiState.value.ugoiraSaveFormat,
+                        saveFormat = _settingsState.value.ugoiraSaveFormat,
                     ) { stage, current, total ->
                         val detail = when {
                             total > 0 -> "$stage $current/$total"
@@ -419,13 +357,13 @@ internal fun PixivViewModel.startNovelDownload(item: DownloadItem, illust: Illus
             it.copy(status = DownloadStatus.Running, detail = "下载小说正文")
         }
         runCatching {
-            val currentReader = _uiState.value.novelReader
+            val currentReader = _novelState.value.novelReader
             val text = currentReader.text.takeIf {
-                _uiState.value.selectedIllust?.id == illust.id && it.isNotBlank()
+                _previewState.value.selectedIllust?.id == illust.id && it.isNotBlank()
             } ?: withAccessToken { token ->
                 repository.novelText(illust.id, token).text
             }
-            val detail = currentReader.detail.takeIf { _uiState.value.selectedIllust?.id == illust.id }
+            val detail = currentReader.detail.takeIf { _previewState.value.selectedIllust?.id == illust.id }
             val title = detail?.title?.takeIf { it.isNotBlank() } ?: illust.title
             val author = detail?.authorName?.takeIf { it.isNotBlank() } ?: illust.authorName
             val header = buildString {
@@ -464,7 +402,7 @@ internal fun PixivViewModel.updateDownload(
     persist: Boolean = true,
     transform: (DownloadItem) -> DownloadItem,
 ) {
-    _uiState.update { state ->
+    _mineState.update { state ->
         val downloads = state.downloads.copy(
             items = state.downloads.items.map { item ->
                 if (item.key == key) transform(item) else item
@@ -473,8 +411,6 @@ internal fun PixivViewModel.updateDownload(
         if (persist) {
             store.saveDownloads(downloads.items)
         }
-        state.copy(
-            downloads = downloads,
-        )
+        state.copy(downloads = downloads)
     }
 }

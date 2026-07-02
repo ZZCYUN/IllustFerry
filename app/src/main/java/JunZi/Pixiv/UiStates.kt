@@ -387,24 +387,30 @@ internal sealed interface SearchResult {
 }
 
 @Immutable
-data class PuxivUiState(
+data class ShellUiState(
     val screen: AppScreen = AppScreen.Login,
-    val previewReturnScreen: AppScreen = AppScreen.Home,
+    val isBusy: Boolean = false,
+    val message: String? = null,
+)
+
+@Immutable
+data class AuthUiState(
     val session: AuthSession? = null,
-    val home: HomeState = HomeState(),
-    val discover: DiscoverState = DiscoverState(),
-    val mine: MyState = MyState(),
-    val history: HistoryState = HistoryState(),
-    val author: AuthorState = AuthorState(),
-    val novelReader: NovelReaderState = NovelReaderState(),
-    val series: SeriesState = SeriesState(),
-    val downloads: DownloadState = DownloadState(),
-    val rankingMode: RankingMode = RankingMode.Day,
-    val rankingDate: String = "",
     val accessTokenInput: String = "",
     val refreshTokenInput: String = "",
     val authCodeInput: String = "",
     val loginUrl: String = "",
+)
+
+@Immutable
+data class HomeUiState(
+    val home: HomeState = HomeState(),
+    val rankingMode: RankingMode = RankingMode.Day,
+    val rankingDate: String = "",
+)
+
+@Immutable
+data class SearchUiState(
     val keyword: String = "",
     val searchKind: SearchKind = SearchKind.Illust,
     val searchSort: SearchSort = SearchSort.DateDesc,
@@ -413,10 +419,18 @@ data class PuxivUiState(
     val searchEndDate: String = "",
     val searchBookmarkNum: String = "",
     val trendingTags: List<TrendingTag> = emptyList(),
+    val discover: DiscoverState = DiscoverState(),
     val items: List<Illust> = emptyList(),
     val searchUsers: List<UserPreview> = emptyList(),
     val nextUrl: String? = null,
     val isSearchActive: Boolean = false,
+    val isTrendingLoading: Boolean = false,
+    val isLoadingMore: Boolean = false,
+)
+
+@Immutable
+data class PreviewUiState(
+    val previewReturnScreen: AppScreen = AppScreen.Home,
     val selectedIllust: Illust? = null,
     val selectedBookmark: SelectedBookmarkState = SelectedBookmarkState(),
     val selectedImageIndex: Int = 0,
@@ -426,7 +440,29 @@ data class PuxivUiState(
     val ugoiraLoadedFrames: Int = 0,
     val ugoiraTotalFrames: Int = 0,
     val isFullScreenPreview: Boolean = false,
-    val previewSwipeMode: PreviewSwipeMode = PreviewSwipeMode.Horizontal,
+    val isPreviewLoading: Boolean = false,
+)
+
+@Immutable
+data class AuthorUiState(
+    val author: AuthorState = AuthorState(),
+)
+
+@Immutable
+data class NovelUiState(
+    val novelReader: NovelReaderState = NovelReaderState(),
+    val series: SeriesState = SeriesState(),
+)
+
+@Immutable
+data class MineUiState(
+    val mine: MyState = MyState(),
+    val history: HistoryState = HistoryState(),
+    val downloads: DownloadState = DownloadState(),
+)
+
+@Immutable
+data class SettingsUiState(
     val themeMode: PuxivThemeMode = PuxivThemeMode.System,
     val useMaterialYou: Boolean = false,
     val themePalette: PuxivThemePalette = PuxivThemePalette.Puxiv,
@@ -437,10 +473,7 @@ data class PuxivUiState(
     val saveUgoiraZip: Boolean = false,
     val filteredTagsInput: String = "",
     val ugoiraSaveFormat: UgoiraSaveFormat = UgoiraSaveFormat.WEBP,
-    val isBusy: Boolean = false,
-    val isTrendingLoading: Boolean = false,
-    val isLoadingMore: Boolean = false,
-    val isPreviewLoading: Boolean = false,
-    val message: String? = null,
+    val previewSwipeMode: PreviewSwipeMode = PreviewSwipeMode.Horizontal,
+    val useThumbnailPreview: Boolean = true,
 )
 

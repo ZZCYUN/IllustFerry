@@ -28,8 +28,6 @@ import JunZi.Pixiv.PuxivThemeMode
 import JunZi.Pixiv.PuxivThemePalette
 import JunZi.Pixiv.SearchKind
 import JunZi.Pixiv.UgoiraSaveFormat
-import JunZi.Pixiv.PuxivUiState
-import JunZi.Pixiv.SelectedBookmarkState
 import JunZi.Pixiv.UserPreviewFeedState
 import JunZi.Pixiv.data.model.AuthSession
 import JunZi.Pixiv.data.model.BookmarkRestrict

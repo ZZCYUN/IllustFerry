@@ -28,8 +28,6 @@ import JunZi.Pixiv.PuxivThemeMode
 import JunZi.Pixiv.PuxivThemePalette
 import JunZi.Pixiv.SearchKind
 import JunZi.Pixiv.UgoiraSaveFormat
-import JunZi.Pixiv.PuxivUiState
-import JunZi.Pixiv.SelectedBookmarkState
 import JunZi.Pixiv.UserPreviewFeedState
 import JunZi.Pixiv.data.model.AuthSession
 import JunZi.Pixiv.data.model.BookmarkRestrict
@@ -283,6 +281,7 @@ internal fun SettingsScreen(
     useRemoteImageProxy: Boolean,
     imageProxyInput: String,
     saveUgoiraZip: Boolean,
+    useThumbnailPreview: Boolean,
     filteredTagsInput: String,
     previewSwipeMode: PreviewSwipeMode,
     ugoiraSaveFormat: UgoiraSaveFormat,
@@ -304,6 +303,7 @@ internal fun SettingsScreen(
     onSaveImageProxy: () -> Unit,
     onResetImageProxy: () -> Unit,
     onSaveUgoiraZipChange: (Boolean) -> Unit,
+    onUseThumbnailPreviewChange: (Boolean) -> Unit,
     onFilteredTagsInputChange: (String) -> Unit,
     onSaveFilteredTags: () -> Unit,
     onUgoiraSaveFormatChange: (UgoiraSaveFormat) -> Unit,
@@ -471,6 +471,35 @@ internal fun SettingsScreen(
                             }
                         }
                     }
+                }
+            }
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = "预览页使用缩略图",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            text = "非全屏模式加载缩略图以加快速度，点击全屏后加载原图。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = useThumbnailPreview,
+                        onCheckedChange = onUseThumbnailPreviewChange,
+                    )
                 }
             }
             Surface(

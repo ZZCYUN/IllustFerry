@@ -28,7 +28,6 @@ import JunZi.Pixiv.PuxivThemeMode
 import JunZi.Pixiv.PuxivThemePalette
 import JunZi.Pixiv.SearchKind
 import JunZi.Pixiv.UgoiraSaveFormat
-import JunZi.Pixiv.PuxivUiState
 import JunZi.Pixiv.SelectedBookmarkState
 import JunZi.Pixiv.UserPreviewFeedState
 import JunZi.Pixiv.data.model.AuthSession
@@ -433,7 +432,9 @@ internal fun PagingFooter(
     }
 }
 
-internal fun Illust.previewUrls(): List<String> = imageUrls.ifEmpty { listOfNotNull(previewUrl) }
+internal fun Illust.previewUrls(useThumbnail: Boolean = false): List<String> =
+    if (useThumbnail && thumbnailUrls.isNotEmpty()) thumbnailUrls
+    else imageUrls.ifEmpty { listOfNotNull(previewUrl) }
 
 internal fun MyState.bookmarkFeed(feed: BookmarkFeed): FeedState {
     return when (feed) {

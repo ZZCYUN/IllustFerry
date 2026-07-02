@@ -160,6 +160,14 @@ class TokenStore(context: Context) {
         preferences.edit { putBoolean(KEY_SAVE_UGOIRA_ZIP, enabled) }
     }
 
+    fun readUseThumbnailPreview(): Boolean {
+        return preferences.getBoolean(KEY_USE_THUMBNAIL_PREVIEW, true)
+    }
+
+    fun saveUseThumbnailPreview(enabled: Boolean) {
+        preferences.edit { putBoolean(KEY_USE_THUMBNAIL_PREVIEW, enabled) }
+    }
+
     fun readFilteredTagsInput(): String {
         return preferences.getString(KEY_FILTERED_TAGS_INPUT, null).orEmpty()
     }
@@ -252,6 +260,7 @@ class TokenStore(context: Context) {
         const val KEY_IMAGE_PROXY_ORIGIN = "image_proxy_origin"
         const val KEY_PREVIEW_SWIPE_MODE = "preview_swipe_mode"
         const val KEY_SAVE_UGOIRA_ZIP = "save_ugoira_zip"
+        const val KEY_USE_THUMBNAIL_PREVIEW = "use_thumbnail_preview"
         const val KEY_FILTERED_TAGS_INPUT = "filtered_tags_input"
         const val KEY_UGOIRA_SAVE_FORMAT = "ugoira_save_format"
         const val KEY_THEME_MODE = "theme_mode"

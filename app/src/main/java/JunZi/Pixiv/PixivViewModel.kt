@@ -63,7 +63,6 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
     internal val store = TokenStore(application)
     internal val repository = PixivRepository(application)
     internal val historyStore = HistoryStore(application)
-    internal val _uiState = MutableStateFlow(PuxivUiState())
     internal val connectivityManager = application.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     internal val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) = updateVpnState()
@@ -74,7 +73,32 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
     internal val previewBackStack = ArrayDeque<PreviewSnapshot>()
     internal val dnsWarmupMutex = Mutex()
     internal var dnsWarmupAttempted = false
-    val uiState: StateFlow<PuxivUiState> = _uiState
+
+    internal val _shellState = MutableStateFlow(ShellUiState(screen = AppScreen.Home))
+    internal val _authState = MutableStateFlow(AuthUiState())
+    internal val _homeState = MutableStateFlow(HomeUiState())
+    internal val _searchState = MutableStateFlow(SearchUiState())
+    internal val _previewState = MutableStateFlow(PreviewUiState())
+    internal val _authorState = MutableStateFlow(AuthorUiState())
+    internal val _novelState = MutableStateFlow(NovelUiState())
+    internal val _mineState = MutableStateFlow(MineUiState())
+    internal val _settingsState = MutableStateFlow(SettingsUiState())
+
+    val shellState: StateFlow<ShellUiState> = _shellState
+    val authState: StateFlow<AuthUiState> = _authState
+    val homeState: StateFlow<HomeUiState> = _homeState
+    val searchState: StateFlow<SearchUiState> = _searchState
+    val previewState: StateFlow<PreviewUiState> = _previewState
+    val authorState: StateFlow<AuthorUiState> = _authorState
+    val novelState: StateFlow<NovelUiState> = _novelState
+    val mineState: StateFlow<MineUiState> = _mineState
+    val settingsState: StateFlow<SettingsUiState> = _settingsState
+
+    /** 跨领域共享：全局消息（snackbar）。 */
+    internal fun showMessage(message: String?) {
+        _shellState.update { it.copy(message = message) }
+    }
+    internal fun clearMessage() = _shellState.update { it.copy(message = null) }
 
     init {
         val session = store.readSession()
@@ -86,6 +110,7 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
         val filteredTagsInput = store.readFilteredTagsInput()
         val storedUgoiraFormat = store.readUgoiraSaveFormat()
         val ugoiraSaveFormat = UgoiraSaveFormat.entries.find { it.name == storedUgoiraFormat } ?: UgoiraSaveFormat.WEBP
+        val useThumbnailPreview = store.readUseThumbnailPreview()
         val themeMode = store.readThemeMode()
         val useMaterialYou = store.readUseMaterialYou()
         val themePalette = store.readThemePalette()
@@ -99,13 +124,15 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
         PixivNetworkConfig.replaceAll(store.readDynamicHostIps())
         PixivImageProxy.useRemoteProxy = useRemoteImageProxy
         OkHttpProvider.ensureApiProxyRunning()
-        _uiState.update {
+        _authState.update {
             it.copy(
                 session = session,
-                screen = AppScreen.Home,
                 accessTokenInput = session?.accessToken.orEmpty(),
                 refreshTokenInput = session?.refreshToken.orEmpty(),
-                downloads = DownloadState(store.readDownloads()),
+            )
+        }
+        _settingsState.update {
+            it.copy(
                 useHostIpRouting = useHostIpRouting,
                 useRemoteImageProxy = useRemoteImageProxy,
                 imageProxyInput = imageProxyOrigin,
@@ -117,10 +144,18 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
                 useMaterialYou = useMaterialYou,
                 themePalette = themePalette,
                 customPalette = customPalette,
+                useThumbnailPreview = useThumbnailPreview,
+            )
+        }
+        _homeState.update {
+            it.copy(
                 home = it.home.copy(
                     diagnostics = it.home.diagnostics.copy(hostSnapshot = PixivNetworkConfig.snapshot()),
                 ),
             )
+        }
+        _mineState.update {
+            it.copy(downloads = DownloadState(store.readDownloads()))
         }
         viewModelScope.launch {
             warmupDnsIfNeeded(forceRefresh = true)
@@ -305,29 +340,30 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
         return expiresAt <= System.currentTimeMillis() + 60_000L
     }
 
-    internal fun PuxivUiState.toPreviewSnapshot(): PreviewSnapshot {
+    internal fun toPreviewSnapshot(): PreviewSnapshot {
+        val preview = _previewState.value
         return PreviewSnapshot(
-            illust = selectedIllust,
-            selectedImageIndex = selectedImageIndex,
-            selectedBookmark = selectedBookmark.copy(isLoading = false),
-            related = related.copy(isLoading = false),
-            comments = comments.copy(isLoading = false, isSending = false),
-            ugoiraFrames = ugoiraFrames,
-            ugoiraLoadedFrames = ugoiraLoadedFrames,
-            ugoiraTotalFrames = ugoiraTotalFrames,
-            returnScreen = previewReturnScreen,
+            illust = preview.selectedIllust,
+            selectedImageIndex = preview.selectedImageIndex,
+            selectedBookmark = preview.selectedBookmark.copy(isLoading = false),
+            related = preview.related.copy(isLoading = false),
+            comments = preview.comments.copy(isLoading = false, isSending = false),
+            ugoiraFrames = preview.ugoiraFrames,
+            ugoiraLoadedFrames = preview.ugoiraLoadedFrames,
+            ugoiraTotalFrames = preview.ugoiraTotalFrames,
+            returnScreen = preview.previewReturnScreen,
         )
     }
 
-    internal fun PuxivUiState.toNavigationEntry(screen: AppScreen): NavigationEntry? {
+    internal fun toNavigationEntry(screen: AppScreen): NavigationEntry? {
         return when (screen) {
-            AppScreen.Preview -> selectedIllust?.let {
+            AppScreen.Preview -> _previewState.value.selectedIllust?.let {
                 NavigationEntry(screen = screen, preview = toPreviewSnapshot())
             }
-            AppScreen.Author -> author.userId?.let {
-                NavigationEntry(screen = screen, author = author.navigationSnapshot())
+            AppScreen.Author -> _authorState.value.author.userId?.let {
+                NavigationEntry(screen = screen, author = _authorState.value.author.navigationSnapshot())
             }
-            AppScreen.Series -> series.takeIf { it.seriesId > 0L }?.let {
+            AppScreen.Series -> _novelState.value.series.takeIf { it.seriesId > 0L }?.let {
                 NavigationEntry(screen = screen, series = it)
             }
             else -> NavigationEntry(screen = screen)
@@ -616,13 +652,14 @@ internal fun AuthorState.navigationSnapshot(): AuthorState {
     )
 }
 
-internal fun PuxivUiState.rankingRequestChanged(
+internal fun PixivViewModel.rankingRequestChanged(
     category: HomeCategory,
     mode: RankingMode,
     date: String?,
 ): Boolean {
-    val current = home.categoryState(category)
-    return home.category != category || current.rankingMode != mode || rankingDate.apiDateOrNull() != date
+    val home = _homeState.value
+    val current = home.home.categoryState(category)
+    return home.home.category != category || current.rankingMode != mode || home.rankingDate.apiDateOrNull() != date
 }
 
 internal fun String.apiDateOrNull(): String? {
@@ -760,7 +797,11 @@ internal fun PuxivThemePalette.messageLabel(): String {
     }
 }
 
-internal fun PuxivUiState.excludedTags(): Set<String> {
+internal fun PixivViewModel.excludedTags(): Set<String> {
+    return _settingsState.value.excludedTags()
+}
+
+internal fun SettingsUiState.excludedTags(): Set<String> {
     return filteredTagsInput.split(',')
         .map { it.trim().trimStart('#').lowercase(Locale.ROOT) }
         .filter { it.isNotBlank() }

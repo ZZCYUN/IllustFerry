@@ -28,8 +28,6 @@ import JunZi.Pixiv.PuxivThemeMode
 import JunZi.Pixiv.PuxivThemePalette
 import JunZi.Pixiv.SearchKind
 import JunZi.Pixiv.UgoiraSaveFormat
-import JunZi.Pixiv.PuxivUiState
-import JunZi.Pixiv.SelectedBookmarkState
 import JunZi.Pixiv.UserPreviewFeedState
 import JunZi.Pixiv.data.model.AuthSession
 import JunZi.Pixiv.data.model.BookmarkRestrict
@@ -306,14 +304,22 @@ internal val LocalSeriesOpener = staticCompositionLocalOf<((Illust) -> Unit)?> {
 
 @Composable
 fun PuxivApp(viewModel: PixivViewModel) {
-    val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val shell by viewModel.shellState.collectAsStateWithLifecycle()
+    val auth by viewModel.authState.collectAsStateWithLifecycle()
+    val home by viewModel.homeState.collectAsStateWithLifecycle()
+    val search by viewModel.searchState.collectAsStateWithLifecycle()
+    val preview by viewModel.previewState.collectAsStateWithLifecycle()
+    val author by viewModel.authorState.collectAsStateWithLifecycle()
+    val novel by viewModel.novelState.collectAsStateWithLifecycle()
+    val mine by viewModel.mineState.collectAsStateWithLifecycle()
+    val settings by viewModel.settingsState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val transientStateHolder = rememberSaveableStateHolder()
-    val mainShellScreen = remember(state.screen) {
-        if (state.screen in setOf(AppScreen.Home, AppScreen.Search, AppScreen.Me, AppScreen.Settings)) {
-            state.screen
-        } else if (state.screen == AppScreen.Preview) {
-            state.previewReturnScreen
+    val mainShellScreen = remember(shell.screen) {
+        if (shell.screen in setOf(AppScreen.Home, AppScreen.Search, AppScreen.Me, AppScreen.Settings)) {
+            shell.screen
+        } else if (shell.screen == AppScreen.Preview) {
+            preview.previewReturnScreen
         } else {
             viewModel.backStack.lastOrNull {
                 it.screen in setOf(AppScreen.Home, AppScreen.Search, AppScreen.Me, AppScreen.Settings)
@@ -321,7 +327,7 @@ fun PuxivApp(viewModel: PixivViewModel) {
         }
     }
     val showMainShell = mainShellScreen in setOf(AppScreen.Home, AppScreen.Search, AppScreen.Me, AppScreen.Settings)
-    val showTransientScreen = state.screen in setOf(
+    val showTransientScreen = shell.screen in setOf(
         AppScreen.Login,
         AppScreen.WebLogin,
         AppScreen.WebPixiv,
@@ -332,21 +338,21 @@ fun PuxivApp(viewModel: PixivViewModel) {
     )
 
     PuxivTheme(
-        themeMode = state.themeMode,
-        useMaterialYou = state.useMaterialYou,
-        palette = state.themePalette,
-        customPalette = state.customPalette,
+        themeMode = settings.themeMode,
+        useMaterialYou = settings.useMaterialYou,
+        palette = settings.themePalette,
+        customPalette = settings.customPalette,
     ) {
-        LaunchedEffect(state.message) {
-            val message = state.message
+        LaunchedEffect(shell.message) {
+            val message = shell.message
             if (message != null) {
                 snackbarHostState.showSnackbar(message)
                 viewModel.clearMessage()
             }
         }
 
-        BackHandler(enabled = state.screen != AppScreen.Home) {
-            if (state.isFullScreenPreview) {
+        BackHandler(enabled = shell.screen != AppScreen.Home) {
+            if (preview.isFullScreenPreview) {
                 viewModel.closeFullScreenPreview()
             } else {
                 viewModel.goBack()
@@ -371,48 +377,53 @@ fun PuxivApp(viewModel: PixivViewModel) {
                 if (showMainShell) {
                     MainShell(
                         screen = mainShellScreen,
-                        home = state.home,
-                        keyword = state.keyword,
-                        isBusy = state.isBusy,
-                        rankingMode = state.rankingMode,
-                        searchKind = state.searchKind,
-                        searchTarget = state.searchTarget,
-                        searchSort = state.searchSort,
-                        isTrendingLoading = state.isTrendingLoading,
-                        trendingTags = state.trendingTags,
-                        discover = state.discover,
-                        items = state.items,
-                        searchUsers = state.searchUsers,
-                        isSearchActive = state.isSearchActive,
-                        isLoadingMore = state.isLoadingMore,
-                        nextUrl = state.nextUrl,
-                        session = state.session,
-                        mine = state.mine,
-                        history = state.history,
-                        downloads = state.downloads.items,
-                        diagnostics = state.home.diagnostics,
-                        useHostIpRouting = state.useHostIpRouting,
-                        useRemoteImageProxy = state.useRemoteImageProxy,
-                        imageProxyInput = state.imageProxyInput,
-                        saveUgoiraZip = state.saveUgoiraZip,
-                        filteredTagsInput = state.filteredTagsInput,
-                        previewSwipeMode = state.previewSwipeMode,
-                        ugoiraSaveFormat = state.ugoiraSaveFormat,
-                        themeMode = state.themeMode,
-                        useMaterialYou = state.useMaterialYou,
-                        themePalette = state.themePalette,
-                        customPalette = state.customPalette,
+                        home = home.home,
+                        keyword = search.keyword,
+                        isBusy = shell.isBusy,
+                        rankingMode = home.rankingMode,
+                        searchKind = search.searchKind,
+                        searchTarget = search.searchTarget,
+                        searchSort = search.searchSort,
+                        isTrendingLoading = search.isTrendingLoading,
+                        trendingTags = search.trendingTags,
+                        discover = search.discover,
+                        items = search.items,
+                        searchUsers = search.searchUsers,
+                        isSearchActive = search.isSearchActive,
+                        isLoadingMore = search.isLoadingMore,
+                        nextUrl = search.nextUrl,
+                        session = auth.session,
+                        mine = mine.mine,
+                        history = mine.history,
+                        downloads = mine.downloads.items,
+                        diagnostics = home.home.diagnostics,
+                        useHostIpRouting = settings.useHostIpRouting,
+                        useRemoteImageProxy = settings.useRemoteImageProxy,
+                        imageProxyInput = settings.imageProxyInput,
+                        saveUgoiraZip = settings.saveUgoiraZip,
+                        useThumbnailPreview = settings.useThumbnailPreview,
+                        filteredTagsInput = settings.filteredTagsInput,
+                        previewSwipeMode = settings.previewSwipeMode,
+                        ugoiraSaveFormat = settings.ugoiraSaveFormat,
+                        themeMode = settings.themeMode,
+                        useMaterialYou = settings.useMaterialYou,
+                        themePalette = settings.themePalette,
+                        customPalette = settings.customPalette,
                         viewModel = viewModel,
                     )
                 }
                 if (showTransientScreen) {
                     AnimatedContent(
-                        targetState = state.screen,
+                        targetState = shell.screen,
                         label = "transient-screen",
                     ) { screen ->
                         when (screen) {
                             AppScreen.Login -> LoginScreen(
-                                state = state,
+                                accessTokenInput = auth.accessTokenInput,
+                                refreshTokenInput = auth.refreshTokenInput,
+                                authCodeInput = auth.authCodeInput,
+                                isBusy = shell.isBusy,
+                                loginUrl = auth.loginUrl,
                                 onAccessTokenChange = viewModel::updateAccessToken,
                                 onRefreshTokenChange = viewModel::updateRefreshToken,
                                 onAuthCodeChange = viewModel::updateAuthCode,
@@ -422,7 +433,7 @@ fun PuxivApp(viewModel: PixivViewModel) {
                             )
 
                             AppScreen.WebLogin -> WebLoginScreen(
-                                loginUrl = state.loginUrl,
+                                loginUrl = auth.loginUrl,
                                 onBack = viewModel::goBack,
                                 onCode = { code, useNetworkProxy -> viewModel.exchangeAuthCode(code, useNetworkProxy) },
                             )
@@ -432,12 +443,13 @@ fun PuxivApp(viewModel: PixivViewModel) {
                             )
 
                             AppScreen.Preview -> PreviewScreen(
-                                state = state,
+                                preview = preview,
+                                shell = shell,
+                                settings = settings,
                                 onBack = viewModel::goBack,
                                 onSelectImage = viewModel::selectImage,
-                                bookmarkTags = state.mine.bookmarkTags(),
-                                areBookmarkTagsLoaded = state.mine.hasBookmarkTagsLoaded,
-                                selectedBookmark = state.selectedBookmark,
+                                bookmarkTags = mine.mine.bookmarkTags(),
+                                areBookmarkTagsLoaded = mine.mine.hasBookmarkTagsLoaded,
                                 onBookmarkPublic = { tags ->
                                     viewModel.bookmarkSelected(
                                         restrict = BookmarkRestrict.Public,
@@ -467,10 +479,10 @@ fun PuxivApp(viewModel: PixivViewModel) {
                             )
 
                             AppScreen.Author -> transientStateHolder.SaveableStateProvider(
-                                key = "author-${state.author.userId ?: 0L}",
+                                key = "author-${author.author.userId ?: 0L}",
                             ) {
                                 AuthorScreen(
-                                    author = state.author,
+                                    author = author.author,
                                     onBack = viewModel::goBack,
                                     onRefreshProfile = viewModel::loadAuthorProfile,
                                     onRefreshWorks = { viewModel.loadAuthorWorks(refresh = true) },
@@ -484,12 +496,12 @@ fun PuxivApp(viewModel: PixivViewModel) {
                             }
 
                             AppScreen.NovelReader -> NovelReaderScreen(
-                                illust = state.selectedIllust,
-                                readerState = state.novelReader,
-                                comments = state.comments,
+                                illust = preview.selectedIllust,
+                                readerState = novel.novelReader,
+                                comments = preview.comments,
                                 onBack = viewModel::closeNovelReader,
                                 onReload = {
-                                    state.selectedIllust?.id?.let { viewModel.loadNovelReader(it) }
+                                    preview.selectedIllust?.id?.let { viewModel.loadNovelReader(it) }
                                 },
                                 onDownload = viewModel::downloadSelectedNovel,
                                 onToggleBookmark = viewModel::toggleNovelBookmark,
@@ -500,7 +512,7 @@ fun PuxivApp(viewModel: PixivViewModel) {
                             )
 
                             AppScreen.Series -> SeriesScreen(
-                                state = state.series,
+                                state = novel.series,
                                 onBack = viewModel::goBack,
                                 onOpenPreview = viewModel::openPreview,
                                 onLoadMore = viewModel::loadMoreSeries,
@@ -551,6 +563,7 @@ internal fun MainShell(
     useRemoteImageProxy: Boolean,
     imageProxyInput: String,
     saveUgoiraZip: Boolean,
+    useThumbnailPreview: Boolean,
     filteredTagsInput: String,
     previewSwipeMode: PreviewSwipeMode,
     ugoiraSaveFormat: UgoiraSaveFormat,
@@ -729,6 +742,7 @@ internal fun MainShell(
                     useRemoteImageProxy = useRemoteImageProxy,
                     imageProxyInput = imageProxyInput,
                     saveUgoiraZip = saveUgoiraZip,
+                    useThumbnailPreview = useThumbnailPreview,
                     filteredTagsInput = filteredTagsInput,
                     previewSwipeMode = previewSwipeMode,
                     ugoiraSaveFormat = ugoiraSaveFormat,
@@ -750,6 +764,7 @@ internal fun MainShell(
                     onSaveImageProxy = viewModel::saveImageProxyOrigin,
                     onResetImageProxy = viewModel::resetImageProxyOrigin,
                     onSaveUgoiraZipChange = viewModel::updateSaveUgoiraZip,
+                    onUseThumbnailPreviewChange = viewModel::updateUseThumbnailPreview,
                     onFilteredTagsInputChange = viewModel::updateFilteredTagsInput,
                     onSaveFilteredTags = viewModel::saveFilteredTags,
                     onUgoiraSaveFormatChange = viewModel::updateUgoiraSaveFormat,
@@ -791,7 +806,11 @@ internal fun MainBottomBar(
 
 @Composable
 internal fun LoginScreen(
-    state: PuxivUiState,
+    accessTokenInput: String,
+    refreshTokenInput: String,
+    authCodeInput: String,
+    isBusy: Boolean,
+    loginUrl: String,
     onAccessTokenChange: (String) -> Unit,
     onRefreshTokenChange: (String) -> Unit,
     onAuthCodeChange: (String) -> Unit,
@@ -862,7 +881,7 @@ internal fun LoginScreen(
                         Text("令牌登录", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     }
                     OutlinedTextField(
-                        value = state.accessTokenInput,
+                        value = accessTokenInput,
                         onValueChange = onAccessTokenChange,
                         modifier = Modifier.fillMaxWidth(),
                         label = { Text("Access token") },
@@ -871,7 +890,7 @@ internal fun LoginScreen(
                         maxLines = 4,
                     )
                     OutlinedTextField(
-                        value = state.refreshTokenInput,
+                        value = refreshTokenInput,
                         onValueChange = onRefreshTokenChange,
                         modifier = Modifier.fillMaxWidth(),
                         label = { Text("Refresh token") },
@@ -882,7 +901,7 @@ internal fun LoginScreen(
                     Button(
                         onClick = onSaveToken,
                         modifier = Modifier.fillMaxWidth(),
-                        enabled = !state.isBusy,
+                        enabled = !isBusy,
                     ) {
                         Icon(Icons.Default.Save, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
@@ -914,14 +933,14 @@ internal fun LoginScreen(
                     FilledTonalButton(
                         onClick = onStartWebLogin,
                         modifier = Modifier.fillMaxWidth(),
-                        enabled = !state.isBusy,
+                        enabled = !isBusy,
                     ) {
                         Icon(Icons.Default.Link, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
                         Text("打开网页登录")
                     }
                     OutlinedTextField(
-                        value = state.authCodeInput,
+                        value = authCodeInput,
                         onValueChange = onAuthCodeChange,
                         modifier = Modifier.fillMaxWidth(),
                         label = { Text("回调 code") },
@@ -931,9 +950,9 @@ internal fun LoginScreen(
                     Button(
                         onClick = onExchangeCode,
                         modifier = Modifier.fillMaxWidth(),
-                        enabled = !state.isBusy,
+                        enabled = !isBusy,
                     ) {
-                        if (state.isBusy) {
+                        if (isBusy) {
                             CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                         } else {
                             Icon(Icons.Default.PlayArrow, contentDescription = null)
@@ -944,7 +963,7 @@ internal fun LoginScreen(
                 }
             }
 
-            if (state.loginUrl.isNotBlank()) {
+            if (loginUrl.isNotBlank()) {
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp),
@@ -952,7 +971,7 @@ internal fun LoginScreen(
                 ) {
                     SelectionContainer {
                         Text(
-                            text = state.loginUrl,
+                            text = loginUrl,
                             modifier = Modifier.padding(12.dp),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,

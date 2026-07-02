@@ -2,58 +2,29 @@ package JunZi.Pixiv
 
 import android.app.Application
 import android.content.ContentValues
-import android.content.Context
-import android.net.ConnectivityManager
-import android.net.Network
-import android.net.NetworkCapabilities
-import android.net.NetworkRequest
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
-import androidx.compose.runtime.Immutable
-import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import JunZi.Pixiv.data.PixivRepository
-import JunZi.Pixiv.data.auth.OAuthPkce
-import JunZi.Pixiv.data.auth.TokenStore
-import JunZi.Pixiv.data.local.HistoryStore
+import JunZi.Pixiv.data.local.HistoryEntry
 import JunZi.Pixiv.data.model.AuthSession
-import JunZi.Pixiv.data.model.AuthorProfile
-import JunZi.Pixiv.data.model.BookmarkRestrict
-import JunZi.Pixiv.data.model.BookmarkTag
 import JunZi.Pixiv.data.model.HomeCategory
-import JunZi.Pixiv.data.model.Illust
-import JunZi.Pixiv.data.model.IllustComment
 import JunZi.Pixiv.data.model.IllustPage
-import JunZi.Pixiv.data.model.NovelDetail
 import JunZi.Pixiv.data.model.RankingMode
-import JunZi.Pixiv.data.model.SearchSort
-import JunZi.Pixiv.data.model.SearchTarget
-import JunZi.Pixiv.data.model.TrendingTag
-import JunZi.Pixiv.data.model.UploadIllustRequest
-import JunZi.Pixiv.data.model.UploadImagePart
-import JunZi.Pixiv.data.model.UploadNovelRequest
-import JunZi.Pixiv.data.model.UgoiraFrameImage
-import JunZi.Pixiv.data.model.UserPreview
-import JunZi.Pixiv.data.model.UserPreviewPage
 import JunZi.Pixiv.data.network.PixivApiException
-import JunZi.Pixiv.data.network.PixivImageProxy
 import JunZi.Pixiv.data.network.PixivNetworkConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
-import java.util.Locale
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.io.File
 
 internal suspend fun PixivViewModel.saveDownloadBytes(relativePath: String, fileName: String, bytes: ByteArray): Uri = withContext(Dispatchers.IO) {
     val app = getApplication<Application>()
@@ -99,12 +70,12 @@ internal suspend fun PixivViewModel.saveDownloadBytes(relativePath: String, file
     }
 }
 internal suspend fun PixivViewModel.runBusy(block: suspend () -> Unit) {
-    _uiState.update { it.copy(isBusy = true, message = null) }
+    _shellState.update { it.copy(isBusy = true, message = null) }
     runCatching { block() }
-        .onFailure { error -> _uiState.update { it.copy(message = error.readableMessage()) } }
-    _uiState.update { it.copy(isBusy = false) }
+        .onFailure { error -> showMessage(error.readableMessage()) }
+    _shellState.update { it.copy(isBusy = false) }
 }
-internal suspend fun PixivViewModel.loadHistoryItems(entries: List<JunZi.Pixiv.data.local.HistoryEntry>, accessToken: String): List<HistoryItem> = coroutineScope {
+internal suspend fun PixivViewModel.loadHistoryItems(entries: List<HistoryEntry>, accessToken: String): List<HistoryItem> = coroutineScope {
     entries.map { entry ->
         async {
             runCatching {
@@ -127,11 +98,11 @@ internal suspend fun PixivViewModel.loadHistoryPage(
     offset: Int,
     append: Boolean,
 ) {
-    _uiState.update { it.copy(history = it.history.copy(isLoading = true, error = null)) }
+    _mineState.update { it.copy(history = it.history.copy(isLoading = true, error = null)) }
     val entriesResult = runCatching { historyStore.recentPage(limit = HISTORY_PAGE_SIZE, offset = offset) }
     val entries = entriesResult.getOrDefault(emptyList())
     val itemsResult = runCatching { loadHistoryItems(entries, accessToken) }
-    _uiState.update { state ->
+    _mineState.update { state ->
         val previousItems = if (append) state.history.items else emptyList()
         state.copy(
             history = state.history.copy(
@@ -174,7 +145,7 @@ internal suspend fun PixivViewModel.firstHomePage(
 }
 internal suspend fun <T> PixivViewModel.withAccessToken(block: suspend (String) -> T): T {
     warmupDnsIfNeeded()
-    var session = requireNotNull(_uiState.value.session) { "请先登录" }
+    var session = requireNotNull(_authState.value.session) { "请先登录" }
     if (session.shouldRefresh()) {
         session = refreshSession(session)
     }
@@ -194,7 +165,7 @@ internal suspend fun PixivViewModel.refreshSession(session: AuthSession): AuthSe
         ?: throw IllegalStateException("登录已过期，且没有 refresh token")
     val refreshed = repository.refresh(refreshToken).withFallbackUser(session)
     store.save(refreshed)
-    _uiState.update {
+    _authState.update {
         it.copy(
             session = refreshed,
             accessTokenInput = refreshed.accessToken,
@@ -215,7 +186,7 @@ internal suspend fun PixivViewModel.warmupDnsIfNeeded(forceRefresh: Boolean = fa
         dnsWarmupAttempted = result.isSuccess
         result
             .onSuccess { dnsResult ->
-                _uiState.update { state ->
+                _homeState.update { state ->
                     state.copy(
                         home = state.home.copy(
                             diagnostics = state.home.diagnostics.copy(
@@ -229,7 +200,7 @@ internal suspend fun PixivViewModel.warmupDnsIfNeeded(forceRefresh: Boolean = fa
             }
             .onFailure { error ->
                 val hasPersistedOrRuntimeIp = PixivNetworkConfig.hasAddressFor(APP_API_HOST)
-                _uiState.update { state ->
+                _homeState.update { state ->
                     state.copy(
                         home = state.home.copy(
                             diagnostics = state.home.diagnostics.copy(
@@ -251,7 +222,7 @@ internal suspend fun PixivViewModel.warmupDnsIfNeeded(forceRefresh: Boolean = fa
             dnsWarmupAttempted = retry.isSuccess
             retry
                 .onSuccess { dnsResult ->
-                    _uiState.update { state ->
+                    _homeState.update { state ->
                         state.copy(
                             home = state.home.copy(
                                 diagnostics = state.home.diagnostics.copy(
@@ -264,7 +235,7 @@ internal suspend fun PixivViewModel.warmupDnsIfNeeded(forceRefresh: Boolean = fa
                     }
                 }
                 .onFailure { error ->
-                    _uiState.update { state ->
+                    _homeState.update { state ->
                         state.copy(
                             home = state.home.copy(
                                 diagnostics = state.home.diagnostics.copy(
@@ -285,4 +256,70 @@ internal suspend fun PixivViewModel.refreshAndPersistDns(): JunZi.Pixiv.data.net
         store.saveDynamicHostIps(PixivNetworkConfig.snapshotIps())
     }
     return result
+}
+internal fun PixivViewModel.registerNetworkCallback() {
+    runCatching {
+        connectivityManager.registerNetworkCallback(
+            android.net.NetworkRequest.Builder().build(),
+            networkCallback,
+        )
+    }
+}
+internal fun PixivViewModel.updateVpnState() {
+    PixivNetworkConfig.isVpnActive = isVpnActive()
+}
+internal fun PixivViewModel.isVpnActive(): Boolean {
+    val activeNetwork = connectivityManager.activeNetwork ?: return false
+    return connectivityManager.getNetworkCapabilities(activeNetwork)
+        ?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN) == true
+}
+internal fun PixivViewModel.runDiagnostics() {
+    val session = _authState.value.session
+    if (session == null) {
+        requireLogin()
+        return
+    }
+    viewModelScope.launch {
+        _homeState.update { state ->
+            state.copy(
+                home = state.home.copy(
+                    diagnostics = state.home.diagnostics.copy(
+                        isRunning = true,
+                        apiStatus = "检测中",
+                        imageStatus = "检测中",
+                        lastError = null,
+                    ),
+                ),
+            )
+        }
+        val dnsResult = runCatching { refreshAndPersistDns().requireAnyUpdated() }
+        val apiResult = runCatching { withAccessToken { repository.recommended(it) } }
+        val probeUrl = apiResult.getOrNull()?.items?.firstOrNull()?.previewUrl
+            ?: _homeState.value.home.illust.recommended.items.firstOrNull()?.previewUrl
+        val imageResult = if (probeUrl != null) runCatching { repository.probeImage(probeUrl) } else null
+
+        val firstError = dnsResult.exceptionOrNull()
+            ?: apiResult.exceptionOrNull()
+            ?: imageResult?.exceptionOrNull()
+        _homeState.update { state ->
+            state.copy(
+                home = state.home.copy(
+                    diagnostics = state.home.diagnostics.copy(
+                        isRunning = false,
+                        lastDnsResult = dnsResult.getOrNull()?.summary ?: "DNS 更新失败",
+                        apiStatus = if (apiResult.isSuccess) "可用" else "失败",
+                        imageStatus = when {
+                            imageResult == null -> "无图片样本"
+                            imageResult.isSuccess -> "可用"
+                            else -> "失败"
+                        },
+                        lastError = firstError?.readableMessage(),
+                        hostSnapshot = PixivNetworkConfig.snapshot(),
+                    ),
+                ),
+            )
+        }
+        firstError?.let { _shellState.update { s -> s.copy(message = it.readableMessage()) } }
+            ?: showMessage(null)
+    }
 }

@@ -28,8 +28,6 @@ import JunZi.Pixiv.PuxivThemeMode
 import JunZi.Pixiv.PuxivThemePalette
 import JunZi.Pixiv.SearchKind
 import JunZi.Pixiv.UgoiraSaveFormat
-import JunZi.Pixiv.PuxivUiState
-import JunZi.Pixiv.SelectedBookmarkState
 import JunZi.Pixiv.UserPreviewFeedState
 import JunZi.Pixiv.data.model.AuthSession
 import JunZi.Pixiv.data.model.BookmarkRestrict
@@ -278,12 +276,13 @@ import java.util.concurrent.Executor
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun PreviewScreen(
-    state: PuxivUiState,
+    preview: PreviewUiState,
+    shell: ShellUiState,
+    settings: SettingsUiState,
     onBack: () -> Unit,
     onSelectImage: (Int) -> Unit,
     bookmarkTags: List<String>,
     areBookmarkTagsLoaded: Boolean,
-    selectedBookmark: SelectedBookmarkState,
     onBookmarkPublic: (List<String>) -> Unit,
     onBookmarkPrivate: (List<String>) -> Unit,
     onAddBookmarkTags: (List<String>) -> Unit,
@@ -301,10 +300,10 @@ internal fun PreviewScreen(
     onSendComment: () -> Unit,
     onOpenAuthor: (Illust) -> Unit,
 ) {
-    val illust = state.selectedIllust
-    LaunchedEffect(illust?.id, illust?.isBookmarked, selectedBookmark.isLoaded) {
+    val illust = preview.selectedIllust
+    LaunchedEffect(illust?.id, illust?.isBookmarked, preview.selectedBookmark.isLoaded) {
         val id = illust?.id ?: return@LaunchedEffect
-        if (illust.isBookmarked && !selectedBookmark.isLoaded) {
+        if (illust.isBookmarked && !preview.selectedBookmark.isLoaded) {
             onLoadBookmarkDetail(id, false)
         }
     }
@@ -323,7 +322,7 @@ internal fun PreviewScreen(
     }
     val fullScreenIndex = illust?.let {
         val size = it.imageUrls.ifEmpty { listOfNotNull(it.previewUrl) }.size
-        state.selectedImageIndex.coerceIn(0, (size - 1).coerceAtLeast(0))
+        preview.selectedImageIndex.coerceIn(0, (size - 1).coerceAtLeast(0))
     } ?: 0
     Scaffold(
         topBar = {
@@ -365,20 +364,21 @@ internal fun PreviewScreen(
                     IllustImagePage(it, illust.width, illust.height)
                 }
             }
-            val safeIndex = state.selectedImageIndex.coerceIn(0, (pages.size - 1).coerceAtLeast(0))
+            val safeIndex = preview.selectedImageIndex.coerceIn(0, (pages.size - 1).coerceAtLeast(0))
 
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding),
             ) {
-                if (!illust.isUgoira && state.previewSwipeMode == PreviewSwipeMode.Vertical) {
+                if (!illust.isUgoira && settings.previewSwipeMode == PreviewSwipeMode.Vertical) {
                     VerticalComicPreview(
                         illust = illust,
                         pages = pages,
                         selectedIndex = safeIndex,
                         measuredRatios = measuredRatios,
-                        animateImages = !state.isFullScreenPreview,
+                        animateImages = !preview.isFullScreenPreview,
+                        useThumbnail = settings.useThumbnailPreview,
                         onSelectImage = onSelectImage,
                         onOpenFullScreen = onOpenFullScreen,
                         onImageMeasured = { index, width, height ->
@@ -387,16 +387,16 @@ internal fun PreviewScreen(
                         footer = {
                             IllustMeta(
                                 illust = illust,
-                                related = state.related,
+                                related = preview.related,
                                 bookmarkTags = bookmarkTags,
-                                selectedBookmark = selectedBookmark,
+                                selectedBookmark = preview.selectedBookmark,
                                 onBookmarkPublic = onBookmarkPublic,
                                 onBookmarkPrivate = onBookmarkPrivate,
                                 onAddBookmarkTags = onAddBookmarkTags,
                                 onToggleBookmarkTag = onToggleBookmarkTag,
                                 onDeleteBookmark = onDeleteBookmark,
                                 onDownload = onDownload,
-                                actionsEnabled = !state.isBusy,
+                                actionsEnabled = !shell.isBusy,
                                 onLoadRelated = onLoadRelated,
                                 onOpenPreview = onOpenPreview,
                                 onTagClick = onTagClick,
@@ -404,7 +404,7 @@ internal fun PreviewScreen(
                                 modifier = Modifier.fillMaxWidth(),
                             )
                             CommentsPanel(
-                                comments = state.comments,
+                                comments = preview.comments,
                                 onInputChange = onCommentInputChange,
                                 onSend = onSendComment,
                                 modifier = Modifier.fillMaxWidth(),
@@ -412,7 +412,7 @@ internal fun PreviewScreen(
                         },
                         modifier = Modifier.fillMaxSize(),
                     )
-                    if (state.isPreviewLoading) {
+                    if (preview.isPreviewLoading) {
                         CircularProgressIndicator(
                             modifier = Modifier.align(Alignment.Center),
                         )
@@ -433,16 +433,17 @@ internal fun PreviewScreen(
                                     .height(dynamicHeight)
                                     .background(MaterialTheme.colorScheme.surfaceVariant),
                             ) {
-                                if (illust.isUgoira && state.ugoiraFrames.isNotEmpty()) {
+                                if (illust.isUgoira && preview.ugoiraFrames.isNotEmpty()) {
                                     UgoiraPlayer(
-                                        frames = state.ugoiraFrames,
+                                        frames = preview.ugoiraFrames,
                                         modifier = Modifier.fillMaxSize(),
                                     )
                                 } else {
                                     HorizontalImagePreview(
                                         illust = illust,
-                                        imageIndex = state.selectedImageIndex,
-                                        animateImages = !state.isFullScreenPreview,
+                                        imageIndex = preview.selectedImageIndex,
+                                        animateImages = !preview.isFullScreenPreview,
+                                        useThumbnail = settings.useThumbnailPreview,
                                         onSelectImage = onSelectImage,
                                         onOpenFullScreen = onOpenFullScreen,
                                         onImageMeasured = { index, width, height ->
@@ -452,11 +453,11 @@ internal fun PreviewScreen(
                                     )
                                 }
 
-                                if (state.isPreviewLoading) {
+                                if (preview.isPreviewLoading) {
                                     if (illust.isUgoira) {
                                         UgoiraLoadingProgress(
-                                            loaded = state.ugoiraLoadedFrames,
-                                            total = state.ugoiraTotalFrames,
+                                            loaded = preview.ugoiraLoadedFrames,
+                                            total = preview.ugoiraTotalFrames,
                                             modifier = Modifier.align(Alignment.Center),
                                         )
                                     } else {
@@ -469,16 +470,16 @@ internal fun PreviewScreen(
 
                             IllustMeta(
                                 illust = illust,
-                                related = state.related,
+                                related = preview.related,
                                 bookmarkTags = bookmarkTags,
-                                selectedBookmark = selectedBookmark,
+                                selectedBookmark = preview.selectedBookmark,
                                 onBookmarkPublic = onBookmarkPublic,
                                 onBookmarkPrivate = onBookmarkPrivate,
                                 onAddBookmarkTags = onAddBookmarkTags,
                                 onToggleBookmarkTag = onToggleBookmarkTag,
                                 onDeleteBookmark = onDeleteBookmark,
                                 onDownload = onDownload,
-                                actionsEnabled = !state.isBusy,
+                                actionsEnabled = !shell.isBusy,
                                 onLoadRelated = onLoadRelated,
                                 onOpenPreview = onOpenPreview,
                                 onTagClick = onTagClick,
@@ -486,7 +487,7 @@ internal fun PreviewScreen(
                                 modifier = Modifier.fillMaxWidth(),
                             )
                             CommentsPanel(
-                                comments = state.comments,
+                                comments = preview.comments,
                                 onInputChange = onCommentInputChange,
                                 onSend = onSendComment,
                                 modifier = Modifier.fillMaxWidth(),
@@ -498,12 +499,12 @@ internal fun PreviewScreen(
         }
     }
 
-    if (state.isFullScreenPreview && illust != null && !illust.isUgoira) {
+    if (preview.isFullScreenPreview && illust != null && !illust.isUgoira) {
         FullScreenPreview(
             illust = illust,
             imageIndex = fullScreenIndex,
-            swipeMode = state.previewSwipeMode,
-            frames = state.ugoiraFrames,
+            swipeMode = settings.previewSwipeMode,
+            frames = preview.ugoiraFrames,
             measuredRatios = measuredRatios,
             onSelectImage = onSelectImage,
             onClose = onCloseFullScreen,
@@ -517,12 +518,13 @@ internal fun HorizontalImagePreview(
     illust: Illust,
     imageIndex: Int,
     animateImages: Boolean,
+    useThumbnail: Boolean = false,
     onSelectImage: (Int) -> Unit,
     onOpenFullScreen: (Int) -> Unit,
     onImageMeasured: (Int, Int, Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val urls = illust.previewUrls()
+    val urls = illust.previewUrls(useThumbnail)
     val safeIndex = imageIndex.coerceIn(0, (urls.size - 1).coerceAtLeast(0))
     val pagerState = rememberPagerState(initialPage = safeIndex) { urls.size.coerceAtLeast(1) }
 
@@ -589,13 +591,14 @@ internal fun VerticalComicPreview(
     selectedIndex: Int,
     measuredRatios: Map<Int, Float>,
     animateImages: Boolean,
+    useThumbnail: Boolean = false,
     onSelectImage: (Int) -> Unit,
     onOpenFullScreen: (Int) -> Unit,
     onImageMeasured: (Int, Int, Int) -> Unit,
     footer: @Composable () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val urls = illust.previewUrls()
+    val urls = illust.previewUrls(useThumbnail)
     val scrollState = rememberScrollState()
     var containerWidthPx by remember(illust.id) { mutableIntStateOf(1) }
     var lastSelectedFromScroll by remember(illust.id) {

@@ -343,6 +343,7 @@ data class Illust(
     val previewUrl: String?,
     val imageUrls: List<String>,
     val imagePages: List<IllustImagePage> = emptyList(),
+    val thumbnailUrls: List<String> = emptyList(),
     val tags: List<String>,
     val pageCount: Int,
     val width: Int,
@@ -496,6 +497,9 @@ fun IllustDto.toDomain(): Illust {
     val preview = PixivImageProxy.convert(
         firstNonBlank(imageUrls?.medium, imageUrls?.squareMedium, imageUrls?.large, images.firstOrNull()),
     )
+    val thumbs = metaPages.orEmpty().mapNotNull { page ->
+        PixivImageProxy.convert(page.imageUrls?.medium)
+    }.ifEmpty { listOfNotNull(preview) }
     val normalizedWidth = width ?: 1
     val normalizedHeight = height ?: 1
 
@@ -517,6 +521,7 @@ fun IllustDto.toDomain(): Illust {
                 height = normalizedHeight,
             )
         },
+        thumbnailUrls = thumbs,
         tags = tags.orEmpty().mapNotNull { it.translatedName ?: it.name }.take(8),
         pageCount = pageCount ?: images.size.coerceAtLeast(1),
         width = normalizedWidth,

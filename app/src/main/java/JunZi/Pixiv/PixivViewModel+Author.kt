@@ -1,63 +1,15 @@
 package JunZi.Pixiv
 
-import android.app.Application
-import android.content.ContentValues
-import android.content.Context
-import android.net.ConnectivityManager
-import android.net.Network
-import android.net.NetworkCapabilities
-import android.net.NetworkRequest
-import android.net.Uri
-import android.os.Build
-import android.os.Environment
-import android.provider.MediaStore
-import androidx.compose.runtime.Immutable
-import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import JunZi.Pixiv.data.PixivRepository
-import JunZi.Pixiv.data.auth.OAuthPkce
-import JunZi.Pixiv.data.auth.TokenStore
-import JunZi.Pixiv.data.local.HistoryStore
-import JunZi.Pixiv.data.model.AuthSession
-import JunZi.Pixiv.data.model.AuthorProfile
 import JunZi.Pixiv.data.model.BookmarkRestrict
-import JunZi.Pixiv.data.model.BookmarkTag
-import JunZi.Pixiv.data.model.HomeCategory
 import JunZi.Pixiv.data.model.Illust
-import JunZi.Pixiv.data.model.IllustComment
-import JunZi.Pixiv.data.model.IllustPage
-import JunZi.Pixiv.data.model.NovelDetail
-import JunZi.Pixiv.data.model.RankingMode
-import JunZi.Pixiv.data.model.SearchSort
-import JunZi.Pixiv.data.model.SearchTarget
-import JunZi.Pixiv.data.model.TrendingTag
-import JunZi.Pixiv.data.model.UploadIllustRequest
-import JunZi.Pixiv.data.model.UploadImagePart
-import JunZi.Pixiv.data.model.UploadNovelRequest
-import JunZi.Pixiv.data.model.UgoiraFrameImage
 import JunZi.Pixiv.data.model.UserPreview
-import JunZi.Pixiv.data.model.UserPreviewPage
-import JunZi.Pixiv.data.network.PixivApiException
-import JunZi.Pixiv.data.network.PixivImageProxy
-import JunZi.Pixiv.data.network.PixivNetworkConfig
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.io.File
-import java.util.Locale
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 
 internal fun PixivViewModel.openAuthor(illust: Illust) {
     val authorId = illust.authorId.takeIf { it > 0L } ?: run {
-        _uiState.update { it.copy(message = "未找到作者信息") }
+        showMessage("未找到作者信息")
         return
     }
     openAuthor(
@@ -82,7 +34,7 @@ internal fun PixivViewModel.openAuthor(
     userAvatarUrl: String?,
 ) {
     navigateTo(AppScreen.Author)
-    _uiState.update {
+    _authorState.update {
         it.copy(
             author = AuthorState(
                 userId = userId,
@@ -91,56 +43,56 @@ internal fun PixivViewModel.openAuthor(
                 userAvatarUrl = userAvatarUrl,
                 selectedTab = AuthorWorkTab.Illust,
             ),
-            message = null,
         )
     }
+    showMessage(null)
     loadAuthorProfile()
     loadAuthorWorks(refresh = true, tab = AuthorWorkTab.Illust)
 }
 internal fun PixivViewModel.selectAuthorTab(tab: AuthorWorkTab) {
-    val current = _uiState.value.author
+    val current = _authorState.value.author
     if (current.selectedTab == tab) return
-    _uiState.update { it.copy(author = it.author.copy(selectedTab = tab)) }
-    val feed = _uiState.value.author.feed(tab)
+    _authorState.update { it.copy(author = it.author.copy(selectedTab = tab)) }
+    val feed = _authorState.value.author.feed(tab)
     if (feed.items.isEmpty()) {
         loadAuthorWorks(refresh = true, tab = tab)
     }
 }
 internal fun PixivViewModel.loadAuthorProfile() {
-    val authorId = _uiState.value.author.userId ?: return
-    if (_uiState.value.session?.accessToken.isNullOrBlank()) return
-    if (_uiState.value.author.isLoadingProfile) return
+    val authorId = _authorState.value.author.userId ?: return
+    if (_authState.value.session?.accessToken.isNullOrBlank()) return
+    if (_authorState.value.author.isLoadingProfile) return
     viewModelScope.launch {
-        _uiState.update { it.copy(author = it.author.copy(isLoadingProfile = true)) }
+        _authorState.update { it.copy(author = it.author.copy(isLoadingProfile = true)) }
         runCatching { withAccessToken { token -> repository.userDetail(authorId, token) } }
             .onSuccess { profile ->
-                if (_uiState.value.author.userId != authorId) return@onSuccess
-                _uiState.update {
+                if (_authorState.value.author.userId != authorId) return@onSuccess
+                _authorState.update {
                     it.copy(
                         author = it.author.mergeProfile(profile).copy(isLoadingProfile = false),
                     )
                 }
             }
             .onFailure { error ->
-                if (_uiState.value.author.userId != authorId) return@onFailure
-                _uiState.update {
+                if (_authorState.value.author.userId != authorId) return@onFailure
+                _authorState.update {
                     it.copy(
                         author = it.author.copy(isLoadingProfile = false),
-                        message = error.readableMessage(),
                     )
                 }
+                showMessage(error.readableMessage())
             }
     }
 }
-internal fun PixivViewModel.loadAuthorWorks(refresh: Boolean = false, tab: AuthorWorkTab = _uiState.value.author.selectedTab) {
-    val state = _uiState.value
-    val authorId = state.author.userId ?: return
-    if (state.session?.accessToken.isNullOrBlank()) return
-    if (state.author.isLoadingWorks) return
-    if (!refresh && state.author.feed(tab).nextUrl == null) return
+internal fun PixivViewModel.loadAuthorWorks(refresh: Boolean = false, tab: AuthorWorkTab = _authorState.value.author.selectedTab) {
+    val authorState = _authorState.value.author
+    val authorId = authorState.userId ?: return
+    if (_authState.value.session?.accessToken.isNullOrBlank()) return
+    if (authorState.isLoadingWorks) return
+    if (!refresh && authorState.feed(tab).nextUrl == null) return
 
     viewModelScope.launch {
-        _uiState.update { current ->
+        _authorState.update { current ->
             current.copy(
                 author = current.author.copy(
                     isLoadingWorks = true,
@@ -156,7 +108,7 @@ internal fun PixivViewModel.loadAuthorWorks(refresh: Boolean = false, tab: Autho
                         else -> repository.userWorks(authorId, token, tab.apiValue)
                     }
                 } else {
-                    val nextUrl = _uiState.value.author.feed(tab).nextUrl ?: return@withAccessToken null
+                    val nextUrl = _authorState.value.author.feed(tab).nextUrl ?: return@withAccessToken null
                     if (tab == AuthorWorkTab.Novel) {
                         repository.nextNovelPage(nextUrl, token)
                     } else {
@@ -165,14 +117,14 @@ internal fun PixivViewModel.loadAuthorWorks(refresh: Boolean = false, tab: Autho
                 }
             }
         }.onSuccess { page ->
-            val currentAuthorId = _uiState.value.author.userId
+            val currentAuthorId = _authorState.value.author.userId
             if (currentAuthorId != authorId) return@onSuccess
             if (page == null) {
-                _uiState.update { it.copy(author = it.author.copy(isLoadingWorks = false)) }
+                _authorState.update { it.copy(author = it.author.copy(isLoadingWorks = false)) }
                 return@onSuccess
             }
             val filteredPage = page.filteredBy(excludedTags())
-            _uiState.update { current ->
+            _authorState.update { current ->
                 current.copy(
                     author = current.author.copy(
                         isLoadingWorks = false,
@@ -187,77 +139,77 @@ internal fun PixivViewModel.loadAuthorWorks(refresh: Boolean = false, tab: Autho
                 )
             }
         }.onFailure { error ->
-            if (_uiState.value.author.userId != authorId) return@onFailure
-            _uiState.update {
+            if (_authorState.value.author.userId != authorId) return@onFailure
+            _authorState.update {
                 it.copy(
                     author = it.author.copy(isLoadingWorks = false).withFeed(tab) { feed ->
                         feed.copy(error = error.readableMessage(), isLoading = false)
                     },
-                    message = error.readableMessage(),
                 )
             }
+            showMessage(error.readableMessage())
         }
     }
 }
 internal fun PixivViewModel.followAuthor(restrict: BookmarkRestrict = BookmarkRestrict.Public) {
-    val authorId = _uiState.value.author.userId ?: return
-    if (_uiState.value.session?.accessToken.isNullOrBlank()) {
+    val authorId = _authorState.value.author.userId ?: return
+    if (_authState.value.session?.accessToken.isNullOrBlank()) {
         requireLogin()
         return
     }
-    if (_uiState.value.author.isFollowBusy) return
+    if (_authorState.value.author.isFollowBusy) return
     viewModelScope.launch {
-        _uiState.update { it.copy(author = it.author.copy(isFollowBusy = true)) }
+        _authorState.update { it.copy(author = it.author.copy(isFollowBusy = true)) }
         runCatching { withAccessToken { token -> repository.followUser(authorId, token, restrict) } }
             .onSuccess {
-                _uiState.update {
+                _authorState.update {
                     it.copy(
                         author = it.author.copy(
                             isFollowBusy = false,
                             isFollowed = true,
                         ),
-                        message = if (restrict == BookmarkRestrict.Private) "已悄悄关注作者" else "已关注作者",
                     )
                 }
+                showMessage(if (restrict == BookmarkRestrict.Private) "已悄悄关注作者" else "已关注作者")
             }
             .onFailure { error ->
-                _uiState.update {
+                _authorState.update {
                     it.copy(
                         author = it.author.copy(isFollowBusy = false),
-                        message = error.readableMessage(),
                     )
                 }
+                showMessage(error.readableMessage())
             }
     }
 }
 internal fun PixivViewModel.unfollowAuthor() {
-    val authorId = _uiState.value.author.userId ?: return
-    if (_uiState.value.session?.accessToken.isNullOrBlank()) {
+    val authorId = _authorState.value.author.userId ?: return
+    if (_authState.value.session?.accessToken.isNullOrBlank()) {
         requireLogin()
         return
     }
-    if (_uiState.value.author.isFollowBusy) return
+    if (_authorState.value.author.isFollowBusy) return
     viewModelScope.launch {
-        _uiState.update { it.copy(author = it.author.copy(isFollowBusy = true)) }
+        _authorState.update { it.copy(author = it.author.copy(isFollowBusy = true)) }
         runCatching { withAccessToken { token -> repository.unfollowUser(authorId, token) } }
             .onSuccess {
-                _uiState.update {
+                _authorState.update {
                     it.copy(
                         author = it.author.copy(
                             isFollowBusy = false,
                             isFollowed = false,
                         ),
-                        message = "已取消关注作者",
                     )
                 }
+                showMessage("已取消关注作者")
             }
             .onFailure { error ->
-                _uiState.update {
+                _authorState.update {
                     it.copy(
                         author = it.author.copy(isFollowBusy = false),
-                        message = error.readableMessage(),
                     )
                 }
+                showMessage(error.readableMessage())
             }
     }
 }

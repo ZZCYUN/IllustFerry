@@ -1,65 +1,18 @@
 package JunZi.Pixiv
 
-import android.app.Application
-import android.content.ContentValues
-import android.content.Context
-import android.net.ConnectivityManager
-import android.net.Network
-import android.net.NetworkCapabilities
-import android.net.NetworkRequest
-import android.net.Uri
-import android.os.Build
-import android.os.Environment
-import android.provider.MediaStore
-import androidx.compose.runtime.Immutable
-import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import JunZi.Pixiv.data.PixivRepository
-import JunZi.Pixiv.data.auth.OAuthPkce
-import JunZi.Pixiv.data.auth.TokenStore
-import JunZi.Pixiv.data.local.HistoryStore
-import JunZi.Pixiv.data.model.AuthSession
-import JunZi.Pixiv.data.model.AuthorProfile
 import JunZi.Pixiv.data.model.BookmarkRestrict
-import JunZi.Pixiv.data.model.BookmarkTag
-import JunZi.Pixiv.data.model.HomeCategory
-import JunZi.Pixiv.data.model.Illust
-import JunZi.Pixiv.data.model.IllustComment
-import JunZi.Pixiv.data.model.IllustPage
-import JunZi.Pixiv.data.model.NovelDetail
-import JunZi.Pixiv.data.model.RankingMode
 import JunZi.Pixiv.data.model.SearchSort
 import JunZi.Pixiv.data.model.SearchTarget
 import JunZi.Pixiv.data.model.TrendingTag
-import JunZi.Pixiv.data.model.UploadIllustRequest
-import JunZi.Pixiv.data.model.UploadImagePart
-import JunZi.Pixiv.data.model.UploadNovelRequest
-import JunZi.Pixiv.data.model.UgoiraFrameImage
-import JunZi.Pixiv.data.model.UserPreview
-import JunZi.Pixiv.data.model.UserPreviewPage
-import JunZi.Pixiv.data.network.PixivApiException
-import JunZi.Pixiv.data.network.PixivImageProxy
-import JunZi.Pixiv.data.network.PixivNetworkConfig
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.io.File
-import java.util.Locale
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 
-internal fun PixivViewModel.updateKeyword(value: String) = _uiState.update { it.copy(keyword = value) }
+internal fun PixivViewModel.updateKeyword(value: String) = _searchState.update { it.copy(keyword = value) }
 internal fun PixivViewModel.updateSearchKind(kind: SearchKind) {
-    if (_uiState.value.searchKind == kind) return
+    if (_searchState.value.searchKind == kind) return
     val shouldRefresh = shouldRefreshSearchAfterParamChange()
-    _uiState.update {
+    _searchState.update {
         it.copy(
             searchKind = kind,
             items = emptyList(),
@@ -71,28 +24,28 @@ internal fun PixivViewModel.updateSearchKind(kind: SearchKind) {
     if (shouldRefresh) search()
 }
 internal fun PixivViewModel.updateSearchSort(sort: SearchSort) {
-    if (_uiState.value.searchSort == sort) return
+    if (_searchState.value.searchSort == sort) return
     val shouldRefresh = shouldRefreshSearchAfterParamChange()
-    _uiState.update { it.copy(searchSort = sort) }
+    _searchState.update { it.copy(searchSort = sort) }
     if (shouldRefresh) search()
 }
 internal fun PixivViewModel.updateSearchTarget(target: SearchTarget) {
-    if (_uiState.value.searchTarget == target) return
+    if (_searchState.value.searchTarget == target) return
     val shouldRefresh = shouldRefreshSearchAfterParamChange()
-    _uiState.update { it.copy(searchTarget = target) }
+    _searchState.update { it.copy(searchTarget = target) }
     if (shouldRefresh) search()
 }
-internal fun PixivViewModel.updateSearchStartDate(value: String) = _uiState.update { it.copy(searchStartDate = value.trim()) }
-internal fun PixivViewModel.updateSearchEndDate(value: String) = _uiState.update { it.copy(searchEndDate = value.trim()) }
+internal fun PixivViewModel.updateSearchStartDate(value: String) = _searchState.update { it.copy(searchStartDate = value.trim()) }
+internal fun PixivViewModel.updateSearchEndDate(value: String) = _searchState.update { it.copy(searchEndDate = value.trim()) }
 internal fun PixivViewModel.updateSearchBookmarkNum(value: String) {
-    _uiState.update { it.copy(searchBookmarkNum = value.filter(Char::isDigit)) }
+    _searchState.update { it.copy(searchBookmarkNum = value.filter(Char::isDigit)) }
 }
 internal fun PixivViewModel.applySearchFilters() {
     search()
 }
 internal fun PixivViewModel.clearSearchFilters() {
     val shouldRefresh = shouldRefreshSearchAfterParamChange()
-    _uiState.update {
+    _searchState.update {
         it.copy(
             searchStartDate = "",
             searchEndDate = "",
@@ -102,24 +55,20 @@ internal fun PixivViewModel.clearSearchFilters() {
     if (shouldRefresh) search()
 }
 internal fun PixivViewModel.loadTrendingTags(refresh: Boolean = false) {
-    val state = _uiState.value
-    if (state.session?.accessToken.isNullOrBlank()) return
+    val state = _searchState.value
+    if (_authState.value.session?.accessToken.isNullOrBlank()) return
     if (state.isTrendingLoading) return
     if (!refresh && state.trendingTags.isNotEmpty()) return
-    _uiState.update { it.copy(isTrendingLoading = true) }
+    _searchState.update { it.copy(isTrendingLoading = true) }
 
     viewModelScope.launch {
         runCatching { withAccessToken { repository.trendingTags(it) } }
             .onSuccess { tags ->
-                _uiState.update { it.copy(trendingTags = tags, isTrendingLoading = false) }
+                _searchState.update { it.copy(trendingTags = tags, isTrendingLoading = false) }
             }
             .onFailure { error ->
-                _uiState.update {
-                    it.copy(
-                        isTrendingLoading = false,
-                        message = error.readableMessage(),
-                    )
-                }
+                _searchState.update { it.copy(isTrendingLoading = false) }
+                showMessage(error.readableMessage())
             }
     }
 }
@@ -127,7 +76,7 @@ internal fun PixivViewModel.searchTrendingTag(tag: TrendingTag) {
     val keyword = tag.name.trim().trimStart('#')
     if (keyword.isBlank()) return
     navigateTo(AppScreen.Search)
-    _uiState.update {
+    _searchState.update {
         it.copy(
             keyword = keyword,
         )
@@ -138,24 +87,24 @@ internal fun PixivViewModel.searchTag(tag: String) {
     val keyword = tag.trim().trimStart('#')
     if (keyword.isBlank()) return
     navigateTo(AppScreen.Search)
-    _uiState.update {
+    _searchState.update {
         it.copy(
             keyword = keyword,
-            isFullScreenPreview = false,
         )
     }
+    _previewState.update { it.copy(isFullScreenPreview = false) }
     search()
 }
 internal fun PixivViewModel.submitHomeSearch() {
-    if (_uiState.value.keyword.isBlank()) {
-        _uiState.update { it.copy(message = "请输入搜索关键词") }
+    if (_searchState.value.keyword.isBlank()) {
+        showMessage("请输入搜索关键词")
         return
     }
     navigateTo(AppScreen.Search)
     search()
 }
 internal fun PixivViewModel.returnToDiscover() {
-    _uiState.update {
+    _searchState.update {
         it.copy(
             keyword = "",
             items = emptyList(),
@@ -163,30 +112,30 @@ internal fun PixivViewModel.returnToDiscover() {
             nextUrl = null,
             isSearchActive = false,
             isLoadingMore = false,
-            message = null,
         )
     }
+    showMessage(null)
     loadDiscover(refresh = false)
 }
 internal fun PixivViewModel.loadDiscover(refresh: Boolean = false) {
-    val state = _uiState.value
-    if (state.session == null) {
+    val state = _searchState.value
+    if (_authState.value.session == null) {
         requireLogin()
         return
     }
     if (!refresh && state.discover.hasLoaded) return
-    _uiState.update { it.copy(discover = it.discover.copy(hasLoaded = true)) }
+    _searchState.update { it.copy(discover = it.discover.copy(hasLoaded = true)) }
     loadDiscoverFeed(DiscoverFeed.Public, refresh = true)
     loadDiscoverFeed(DiscoverFeed.Private, refresh = true)
 }
 internal fun PixivViewModel.loadDiscoverFeed(feed: DiscoverFeed, refresh: Boolean = false) {
-    val state = _uiState.value
-    if (state.session?.accessToken.isNullOrBlank()) return
+    val state = _searchState.value
+    if (_authState.value.session?.accessToken.isNullOrBlank()) return
     val current = state.discover.feed(feed)
     if (current.isLoading) return
 
     viewModelScope.launch {
-        _uiState.update { currentState ->
+        _searchState.update { currentState ->
             currentState.copy(discover = currentState.discover.withFeed(feed) { it.copy(isLoading = true, error = null) })
         }
         runCatching {
@@ -198,19 +147,19 @@ internal fun PixivViewModel.loadDiscoverFeed(feed: DiscoverFeed, refresh: Boolea
                     }
                     repository.following(token, restrict)
                 } else {
-                    val nextUrl = _uiState.value.discover.feed(feed).nextUrl ?: return@withAccessToken null
+                    val nextUrl = _searchState.value.discover.feed(feed).nextUrl ?: return@withAccessToken null
                     repository.nextPage(nextUrl, token)
                 }
             }
         }.onSuccess { page ->
             if (page == null) {
-                _uiState.update { currentState ->
+                _searchState.update { currentState ->
                     currentState.copy(discover = currentState.discover.withFeed(feed) { it.copy(isLoading = false) })
                 }
                 return@onSuccess
             }
             val filteredPage = page.filteredBy(excludedTags())
-            _uiState.update { currentState ->
+            _searchState.update { currentState ->
                 currentState.copy(
                     discover = currentState.discover.withFeed(feed) { old ->
                         old.copy(
@@ -223,7 +172,7 @@ internal fun PixivViewModel.loadDiscoverFeed(feed: DiscoverFeed, refresh: Boolea
                 )
             }
         }.onFailure { error ->
-            _uiState.update { currentState ->
+            _searchState.update { currentState ->
                 currentState.copy(
                     discover = currentState.discover.withFeed(feed) {
                         it.copy(isLoading = false, error = error.readableMessage())
@@ -234,7 +183,7 @@ internal fun PixivViewModel.loadDiscoverFeed(feed: DiscoverFeed, refresh: Boolea
     }
 }
 internal fun PixivViewModel.search() {
-    val state = _uiState.value
+    val state = _searchState.value
     val keyword = state.keyword.trim()
     val kind = state.searchKind
     val sort = state.searchSort
@@ -242,16 +191,16 @@ internal fun PixivViewModel.search() {
     val startDate = state.searchStartDate.apiDateOrNull()
     val endDate = state.searchEndDate.apiDateOrNull()
     val bookmarkNum = state.searchBookmarkNum.apiPositiveIntOrNull()
-    if (state.session?.accessToken.isNullOrBlank()) {
+    if (_authState.value.session?.accessToken.isNullOrBlank()) {
         requireLogin()
         return
     }
     if (keyword.isBlank()) {
-        _uiState.update { it.copy(message = "请输入搜索关键词") }
+        showMessage("请输入搜索关键词")
         return
     }
 
-    _uiState.update {
+    _searchState.update {
         it.copy(
             items = emptyList(),
             searchUsers = emptyList(),
@@ -286,16 +235,18 @@ internal fun PixivViewModel.search() {
                     SearchKind.User -> SearchResult.Users(repository.searchUsers(keyword, token))
                 }
             }
-            _uiState.update { current ->
-                if (
-                    current.keyword.trim() != keyword ||
-                    current.searchKind != kind ||
-                    current.searchSort != sort ||
-                    current.searchTarget != target ||
-                    current.searchStartDate.apiDateOrNull() != startDate ||
-                    current.searchEndDate.apiDateOrNull() != endDate ||
-                    current.searchBookmarkNum.apiPositiveIntOrNull() != bookmarkNum
-                ) {
+            val paramsChanged = _searchState.value.let { cur ->
+                cur.keyword.trim() != keyword ||
+                    cur.searchKind != kind ||
+                    cur.searchSort != sort ||
+                    cur.searchTarget != target ||
+                    cur.searchStartDate.apiDateOrNull() != startDate ||
+                    cur.searchEndDate.apiDateOrNull() != endDate ||
+                    cur.searchBookmarkNum.apiPositiveIntOrNull() != bookmarkNum
+            }
+            if (!paramsChanged) showMessage(null)
+            _searchState.update { current ->
+                if (paramsChanged) {
                     current
                 } else {
                     when (result) {
@@ -304,14 +255,12 @@ internal fun PixivViewModel.search() {
                             searchUsers = emptyList(),
                             nextUrl = result.page.nextUrl,
                             isSearchActive = true,
-                            message = null,
                         )
                         is SearchResult.Users -> current.copy(
                             items = emptyList(),
                             searchUsers = result.page.items,
                             nextUrl = result.page.nextUrl,
                             isSearchActive = true,
-                            message = null,
                         )
                     }
                 }
@@ -320,13 +269,14 @@ internal fun PixivViewModel.search() {
     }
 }
 internal fun PixivViewModel.loadMore() {
-    val state = _uiState.value
+    val state = _searchState.value
     val nextUrl = state.nextUrl ?: return
-    val token = state.session?.accessToken ?: return
-    if (state.isLoadingMore || state.isBusy) return
+    val token = _authState.value.session?.accessToken ?: return
+    if (state.isLoadingMore || _shellState.value.isBusy) return
 
     viewModelScope.launch {
-        _uiState.update { it.copy(isLoadingMore = true, message = null) }
+        _searchState.update { it.copy(isLoadingMore = true) }
+        showMessage(null)
         runCatching {
             withAccessToken {
                 when (state.searchKind) {
@@ -337,7 +287,7 @@ internal fun PixivViewModel.loadMore() {
             }
         }
             .onSuccess { result ->
-                _uiState.update {
+                _searchState.update {
                     when (result) {
                         is SearchResult.Works -> it.copy(
                             items = it.items + result.page.items,
@@ -353,14 +303,16 @@ internal fun PixivViewModel.loadMore() {
                 }
             }
             .onFailure { error ->
-                _uiState.update { it.copy(isLoadingMore = false, message = error.readableMessage()) }
+                _searchState.update { it.copy(isLoadingMore = false) }
+                showMessage(error.readableMessage())
             }
     }
 }
 internal fun PixivViewModel.shouldRefreshSearchAfterParamChange(): Boolean {
-    val state = _uiState.value
-    return state.screen == AppScreen.Search &&
+    val state = _searchState.value
+    val shell = _shellState.value
+    return shell.screen == AppScreen.Search &&
         state.keyword.isNotBlank() &&
         state.isSearchActive &&
-        !state.isBusy
+        !shell.isBusy
 }
