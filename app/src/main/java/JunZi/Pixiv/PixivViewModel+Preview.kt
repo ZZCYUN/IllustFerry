@@ -21,7 +21,7 @@ internal fun PixivViewModel.loadRelated(refresh: Boolean = false) {
     val illustId = _previewState.value.selectedIllust?.id ?: return
     loadRelatedFeed(illustId, refresh)
 }
-internal fun PixivViewModel.openPreview(illust: Illust) {
+internal fun PixivViewModel.openPreview(illust: Illust, alreadyFetchedDetail: Boolean = false) {
     if (illust.type.equals("novel", ignoreCase = true)) {
         openNovelReader(illust)
         return
@@ -50,7 +50,7 @@ internal fun PixivViewModel.openPreview(illust: Illust) {
     _shellState.update { it.copy(screen = AppScreen.Preview) }
     showMessage(null)
     loadSelectedBookmarkDetail(illust.id, force = true)
-    refreshPreviewDetail(illust)
+    refreshPreviewDetail(illust, skipDetailFetch = alreadyFetchedDetail)
     saveHistory(illust)
 }
 internal fun PixivViewModel.openFullScreenPreviewForIllust(illust: Illust) {
@@ -149,7 +149,7 @@ internal fun PixivViewModel.openPreviewById(illustId: Long, fullScreen: Boolean 
     viewModelScope.launch {
         runBusy {
             val illust = withAccessToken { token -> repository.detail(illustId, token) }
-            openPreview(illust)
+            openPreview(illust, alreadyFetchedDetail = true)
             if (fullScreen) {
                 _previewState.update { it.copy(isFullScreenPreview = true) }
             }
@@ -211,16 +211,25 @@ internal fun PixivViewModel.sendComment() {
     }
 }
 internal fun PixivViewModel.closePreview() = goBack()
-internal fun PixivViewModel.refreshPreviewDetail(illust: Illust) {
+internal fun PixivViewModel.refreshPreviewDetail(illust: Illust, skipDetailFetch: Boolean = false) {
     val token = _authState.value.session?.accessToken ?: return
     viewModelScope.launch {
+        if (skipDetailFetch) {
+            _previewState.update { it.copy(selectedIllust = illust, isPreviewLoading = illust.isUgoira) }
+            saveHistory(illust)
+            loadRelatedFeed(illust.id, refresh = true)
+            loadComments(illust.id)
+            if (illust.isUgoira) {
+                loadUgoiraFrames(illust.id)
+            }
+            return@launch
+        }
         _previewState.update { it.copy(isPreviewLoading = true) }
         runCatching { withAccessToken { repository.detail(illust.id, it) } }
             .onSuccess { detail ->
                 if (_previewState.value.selectedIllust?.id != illust.id) return@onSuccess
                 _previewState.update { it.copy(selectedIllust = detail, isPreviewLoading = detail.isUgoira) }
                 saveHistory(detail)
-                loadSelectedBookmarkDetail(detail.id, force = true)
                 loadRelatedFeed(detail.id, refresh = true)
                 loadComments(detail.id)
                 if (detail.isUgoira) {

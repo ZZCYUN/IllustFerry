@@ -78,6 +78,13 @@ internal suspend fun PixivViewModel.runBusy(block: suspend () -> Unit) {
 internal suspend fun PixivViewModel.loadHistoryItems(entries: List<HistoryEntry>, accessToken: String): List<HistoryItem> = coroutineScope {
     entries.map { entry ->
         async {
+            val cached = entry.illust
+            if (cached != null) {
+                return@async HistoryItem(
+                    illust = cached,
+                    viewedAtMillis = entry.viewedAtMillis,
+                )
+            }
             runCatching {
                 val stored = entry.illustId
                 val illust = if (stored < 0L) {

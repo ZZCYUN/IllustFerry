@@ -28,17 +28,22 @@ internal fun PixivViewModel.loadMyProfile() {
     viewModelScope.launch {
         runCatching { withAccessToken { token -> repository.userDetail(userId, token) } }
             .onSuccess { profile ->
-                val followerPage = runCatching {
-                    withAccessToken { token -> repository.userFollowers(userId, token) }
-                }.getOrNull()
+                val followerCount = profile.followerCount
+                val followerPage = if (followerCount <= 0) {
+                    runCatching {
+                        withAccessToken { token -> repository.userFollowers(userId, token) }
+                    }.getOrNull()
+                } else {
+                    null
+                }
                 _mineState.update { current ->
                     current.copy(
                         mine = current.mine.copy(
                             followCount = profile.followingCount,
-                            followerCount = profile.followerCount.takeIf { it > 0 }
+                            followerCount = followerCount.takeIf { it > 0 }
                                 ?: followerPage?.items?.size
                                 ?: current.mine.followerCount,
-                            hasMoreFollowers = if (profile.followerCount > 0) {
+                            hasMoreFollowers = if (followerCount > 0) {
                                 false
                             } else {
                                 followerPage?.nextUrl != null
@@ -394,7 +399,7 @@ internal fun PixivViewModel.loadMyFollowing(feed: FollowUserFeed, refresh: Boole
 }
 internal fun PixivViewModel.saveHistory(illust: Illust) {
     viewModelScope.launch(Dispatchers.IO) {
-        historyStore.save(historyStorageKey(illust))
+        historyStore.save(historyStorageKey(illust), illust = illust)
         val accessToken = _authState.value.session?.accessToken
         if (!accessToken.isNullOrBlank()) {
             val entries = runCatching { historyStore.recentPage(limit = HISTORY_PAGE_SIZE, offset = 0) }.getOrDefault(emptyList())

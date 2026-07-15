@@ -301,7 +301,7 @@ internal fun PreviewScreen(
     onOpenAuthor: (Illust) -> Unit,
 ) {
     val illust = preview.selectedIllust
-    LaunchedEffect(illust?.id, illust?.isBookmarked, preview.selectedBookmark.isLoaded) {
+    LaunchedEffect(illust?.id, preview.selectedBookmark.isLoaded) {
         val id = illust?.id ?: return@LaunchedEffect
         if (illust.isBookmarked && !preview.selectedBookmark.isLoaded) {
             onLoadBookmarkDetail(id, false)
