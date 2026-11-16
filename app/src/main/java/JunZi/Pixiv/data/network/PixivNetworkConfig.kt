@@ -12,6 +12,15 @@ object PixivNetworkConfig {
     @Volatile
     var useHostIpRouting: Boolean = true
 
+    /**
+     * cloudflare-ech.com 的 ECHConfigList（base64）。
+     * 所有 Cloudflare 前置的 pixiv 域共用这一份 config；null 表示尚未获取，
+     * CF 域上游会回退到无 SNI 直连（对 CF 无效，仅作为明显失败的信号暴露给上层）。
+     * 由 [PixivDnsUpdater] 刷新，[JunZi.Pixiv.data.network.DohPreferences] 持久化。
+     */
+    @Volatile
+    var echConfig: String? = null
+
     @Volatile
     var isVpnActive: Boolean = false
 
@@ -84,10 +93,10 @@ object PixivNetworkConfig {
     private val IPV4_REGEX = Regex("""\d{1,3}(\.\d{1,3}){3}""")
 
     /**
-     * 校验 IPv4 字面量且拒绝 bogon 段。DNS 源（api.sb6.me）偶尔会被 GFW 投毒返回
-     * 127.0.0.1 / 0.0.0.0 这类地址，若原样进表，LocalPixivProxy 上游拨号就会拨到
-     * 127.0.0.1:443 触发 ECONNREFUSED。pixiv 的 Tokyo 源站都是公网 IP，过滤 bogon
-     * 不会误伤真实候选。
+     * 校验 IPv4 字面量且拒绝 bogon 段。DoH 解析正常时不会返回内网地址，但内容
+     * 过滤型 DoH（如 cleanbrowsing family）可能对被拦域名返回 NXDOMAIN 或 0.0.0.0
+     * 这类占位应答；若原样进表，LocalPixivProxy 上游拨号就会拨到 127.0.0.1:443。
+     * pixiv 的 Tokyo 源站都是公网 IP，过滤 bogon 不会误伤真实候选。
      */
     fun isValidPublicIpv4(ip: String): Boolean {
         if (!IPV4_REGEX.matches(ip)) return false

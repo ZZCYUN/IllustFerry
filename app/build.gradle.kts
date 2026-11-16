@@ -5,14 +5,16 @@ plugins {
 
 android {
     namespace = "JunZi.Pixiv"
+    // 固定使用原版 r30 NDK（C:/AAA_Work/tools/android-ndk-r30，默认 16K 分页对齐）
+    ndkVersion = "30.0.16248370"
     compileSdk = 36
 
     defaultConfig {
         applicationId = "JunZi.Pixiv"
         minSdk = 26
         targetSdk = 36
-        versionCode = 13
-        versionName = "1.1.5"
+        versionCode = 14
+        versionName = "1.2.0"
     }
 
     splits {
@@ -61,6 +63,7 @@ android {
 }
 
 dependencies {
+    implementation(files("libs/illusttunnel.aar"))
     implementation(platform("androidx.compose:compose-bom:2026.05.00"))
     implementation("androidx.activity:activity-compose:1.13.0")
     implementation("androidx.core:core-ktx:1.18.0")

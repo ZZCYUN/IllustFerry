@@ -215,7 +215,7 @@ class LocalPixivProxy(
         target: Authority,
         executor: ExecutorService,
     ) {
-        val (upstream, upstreamTls) = openMitmUpstream(target.host, target.port, 20_000)
+        val upstream = openMitmUpstream(target.host, target.port)
         upstream.soTimeout = 0
         client.soTimeout = 0
         reportState("client tls handshake ${target.host}:${target.port}")
@@ -223,47 +223,85 @@ class LocalPixivProxy(
         try {
             proxyMitmHttp(
                 clientTls = clientTls,
-                upstreamTls = upstreamTls,
+                upstream = upstream,
                 host = target.host,
                 executor = executor,
             )
         } finally {
             runCatching { clientTls.close() }
-            runCatching { upstreamTls.close() }
-            closeAndForget(upstream)
+            runCatching { upstream.close() }
         }
     }
 
     /**
-     * 给 MITM 链路用：把 TCP 和 TLS 握手当成一对原子操作做候选回退。
-     * 之前的 connectUpstream 只在 TCP 层 break，一旦 172.64.x 这种 IP TCP 通了但
-     * TLS 被对端（或 GFW）RST，整条 MITM 就死了。OkHttp 默认就是 TCP+TLS 一起重试，
-     * 这里复现同样语义，但候选只能来自运行时/持久化的动态 Host IP 表。
+     * MITM 上游连接。
+     *
+     * TLS 全部下沉到 Go 隧道层（libillust_ech.so）完成，Java 侧拿到的是明文 HTTP 流：
+     *   - Cloudflare 前置域（app-api / oauth / accounts / source / www / pixivision）：
+     *     ECH 模式 —— 外层 SNI 是 cloudflare-ech.com（不在 GFW 阻断名单），内层 SNI
+     *     才是真实域名，完整证书校验。pixiv 域名自己的 HTTPS RR 不发布 ech 参数，
+     *     config 统一来自 cloudflare-ech.com 的 HTTPS RR（见 PixivDnsUpdater）。
+     *   - Tokyo 自有源站（public-api / *.pximg.net）：无 SNI 模式 —— ClientHello 不带
+     *     SNI 扩展绕开 GFW DPI，握手后按证书 SAN 补主机名校验。
+     *
+     * 候选 IP 逐个尝试（TCP+TLS 原子回退，沿用原有语义）。Go 库不可用时回退到旧的
+     * JVM 无 SNI 链路（仅对 Tokyo 域有效；CF 域没有 SNI 无法路由，会直接失败）。
      */
-    private fun openMitmUpstream(host: String, port: Int, timeoutMillis: Int): Pair<Socket, SSLSocket> {
+    private fun openMitmUpstream(host: String, port: Int): Socket {
         val candidates = mitmUpstreamCandidates(host)
+        val echConfig = PixivNetworkConfig.echConfig
+        val useEch = echConfig != null && PixivHost.from(host)?.isCloudflareFronted == true
         var lastFailure: Throwable? = null
-        candidates.forEach { candidate ->
-            val tcp = trackSocket(Socket())
-            try {
-                reportState("dial $host:$port via $candidate")
-                tcp.connect(InetSocketAddress(candidate, port), timeoutMillis)
-                reportState("dial success $host:$port via $candidate")
-                tcp.soTimeout = timeoutMillis
-                reportState("upstream tls handshake $host:$port via $candidate")
-                val tls = createUpstreamTlsSocket(tcp, host, port)
-                tcp.soTimeout = 0
-                return tcp to tls
-            } catch (error: Throwable) {
-                lastFailure = error
-                reportError("upstream $host:$port via $candidate", error)
-                closeAndForget(tcp)
+        for (candidate in candidates) {
+            if (EchTunnel.available) {
+                try {
+                    val mode = if (useEch) "ech" else "no-sni"
+                    reportState("upstream tunnel $mode $host via $candidate:$port")
+                    val handle = EchTunnel.open(candidate, host, if (useEch) echConfig!! else "", port)
+                    if (handle > 0) {
+                        reportState("tunnel established $host via $candidate ($mode)")
+                        return TunnelSocket(handle, candidate)
+                    }
+                    val detail = EchTunnel.lastError(handle)
+                    lastFailure = IOException("tunnel open $host via $candidate failed code=$handle detail=$detail")
+                    reportError("tunnel open $host", lastFailure as IOException)
+                    continue
+                } catch (throwable: Throwable) {
+                    lastFailure = throwable
+                    reportError("tunnel open $host via $candidate", throwable)
+                    continue
+                }
             }
+            // 回退路径：JVM 无 SNI TLS。只对 Tokyo 源站有意义。
+            runCatching { openLegacyJvmUpstream(host, candidate, port) }
+                .onSuccess { return it }
+                .onFailure { error ->
+                    lastFailure = error
+                    reportError("upstream $host:$port via $candidate", error)
+                }
         }
         throw IOException(
             "All upstream candidates failed for $host (${candidates.joinToString()})",
             lastFailure,
         )
+    }
+
+    /**
+     * 旧链路：JVM 无 SNI TLS（Go 库不可用时的兜底）。
+     * 返回的是 SSLSocket——getInputStream/getOutputStream 已是 TLS 解密后的明文流，
+     * 与 TunnelSocket 的明文语义一致，上层无感知。
+     */
+    private fun openLegacyJvmUpstream(host: String, candidate: String, port: Int): Socket {
+        val tcp = Socket()
+        tcp.connect(InetSocketAddress(candidate, port), 12_000)
+        tcp.soTimeout = 20_000
+        reportState("upstream tls strategy no-sni $host via $candidate:$port")
+        val socket = (clientSslContext.socketFactory.createSocket(tcp, candidate, port, true) as SSLSocket)
+        socket.useClientMode = true
+        socket.enabledProtocols = socket.supportedProtocols
+        forceHttp11Alpn(socket)
+        socket.startHandshake()
+        return socket
     }
 
     private fun mitmUpstreamCandidates(host: String): List<String> {
@@ -396,7 +434,7 @@ class LocalPixivProxy(
      */
     private fun proxyMitmHttp(
         clientTls: SSLSocket,
-        upstreamTls: SSLSocket,
+        upstream: Socket,
         host: String,
         executor: ExecutorService,
     ) {
@@ -406,7 +444,7 @@ class LocalPixivProxy(
             try {
                 relayClientToUpstream(
                     input = clientTls.getInputStream(),
-                    output = upstreamTls.getOutputStream(),
+                    output = upstream.getOutputStream(),
                     host = host,
                     pending = pending,
                     upgraded = upgraded,
@@ -415,14 +453,14 @@ class LocalPixivProxy(
                 // 端到端断开（client 关闭 / 上游 RST / TLS close_notify）在 read/write 上抛
                 // 都是常规收尾，不写 error 流，免得淹没真正的故障。
             } finally {
-                runCatching { upstreamTls.close() }
+                runCatching { upstream.close() }
                 runCatching { clientTls.close() }
             }
         }
         val respJob = executor.submit {
             try {
                 relayUpstreamToClient(
-                    input = upstreamTls.getInputStream(),
+                    input = upstream.getInputStream(),
                     output = clientTls.getOutputStream(),
                     host = host,
                     pending = pending,
@@ -430,7 +468,7 @@ class LocalPixivProxy(
                 )
             } catch (_: Throwable) {
             } finally {
-                runCatching { upstreamTls.close() }
+                runCatching { upstream.close() }
                 runCatching { clientTls.close() }
             }
         }

@@ -48,7 +48,9 @@ import java.util.zip.ZipInputStream
 class PixivRepository(
     context: Context? = null,
     private val api: PixivApiClient = PixivApiClient(),
-    private val dnsUpdater: PixivDnsUpdater = PixivDnsUpdater(),
+    private val dnsUpdater: PixivDnsUpdater = PixivDnsUpdater.withPreferences(
+        requireNotNull(context?.applicationContext) { "PixivRepository needs a Context for DoH persistence" }
+    ),
 ) {
     private val appContext = context?.applicationContext
 

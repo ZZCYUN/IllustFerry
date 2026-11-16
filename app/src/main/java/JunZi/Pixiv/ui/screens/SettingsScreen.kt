@@ -131,7 +131,11 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.RadioButton
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Login
@@ -278,6 +282,7 @@ import java.util.concurrent.Executor
 internal fun SettingsScreen(
     diagnostics: DiagnosticsState,
     useHostIpRouting: Boolean,
+    dohEndpoint: String,
     useRemoteImageProxy: Boolean,
     imageProxyInput: String,
     saveUgoiraZip: Boolean,
@@ -293,6 +298,7 @@ internal fun SettingsScreen(
     onRefreshDns: () -> Unit,
     onDiagnostics: () -> Unit,
     onHostIpRoutingEnabledChange: (Boolean) -> Unit,
+    onDohEndpointChange: (String) -> Unit,
     onPreviewSwipeModeChange: (PreviewSwipeMode) -> Unit,
     onThemeModeChange: (PuxivThemeMode) -> Unit,
     onMaterialYouEnabledChange: (Boolean) -> Unit,
@@ -381,6 +387,10 @@ internal fun SettingsScreen(
                     )
                 }
             }
+            DohSettingsSection(
+                current = dohEndpoint,
+                onChanged = onDohEndpointChange,
+            )
             if (useHostIpRouting) {
                 Text(
                     text = "网络诊断",
@@ -653,6 +663,194 @@ internal fun SettingsScreen(
             }
             ExperimentalFeaturesSection(onOpenWebPixiv = onOpenWebPixiv)
             OpenSourceLicenseSection()
+        }
+    }
+}
+
+@Composable
+private fun DohSettingsSection(
+    current: String,
+    onChanged: (String) -> Unit,
+) {
+    var showPicker by rememberSaveable { mutableStateOf(false) }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        onClick = { showPicker = true },
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                text = "DoH 解析服务器",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = if (current == JunZi.Pixiv.data.network.DohEndpoints.AUTO) {
+                    "自动（按列表顺序探测，成功的写入本地）"
+                } else {
+                    current.substringAfter("https://").trimEnd('/')
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = "Cloudflare 前置域名的 IP 与 ECH 配置都从这里解析；解析失败自动跳过换下一个",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+
+    if (showPicker) {
+        DohEndpointPickerDialog(
+            current = current,
+            onDismiss = { showPicker = false },
+            onChanged = onChanged,
+        )
+    }
+}
+
+@Composable
+private fun DohEndpointPickerDialog(
+    current: String,
+    onDismiss: () -> Unit,
+    onChanged: (String) -> Unit,
+) {
+    var showCustomInput by rememberSaveable { mutableStateOf(false) }
+    var customInput by rememberSaveable { mutableStateOf("") }
+    var customError by rememberSaveable { mutableStateOf<String?>(null) }
+    val customEndpoint = current.takeIf { url ->
+        url != JunZi.Pixiv.data.network.DohEndpoints.AUTO &&
+            JunZi.Pixiv.data.network.DohEndpoints.sourceOf(url) == null
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("选择 DoH 服务器") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .verticalScroll(rememberScrollState())
+                    .selectableGroup(),
+            ) {
+                DohEndpointOption(
+                    title = "自动（推荐）",
+                    subtitle = "按列表顺序依次尝试，成功的端点会被记住",
+                    selected = current == JunZi.Pixiv.data.network.DohEndpoints.AUTO,
+                    onClick = {
+                        onChanged(JunZi.Pixiv.data.network.DohEndpoints.AUTO)
+                        onDismiss()
+                    },
+                )
+                JunZi.Pixiv.data.network.DohEndpoints.ALL.forEach { endpoint ->
+                    DohEndpointOption(
+                        title = endpoint.url.substringAfter("https://").trimEnd('/'),
+                        subtitle = endpoint.source,
+                        selected = current == endpoint.url,
+                        onClick = {
+                            onChanged(endpoint.url)
+                            onDismiss()
+                        },
+                    )
+                }
+                DohEndpointOption(
+                    title = "自定义",
+                    subtitle = customEndpoint ?: "手动输入一个 RFC 8484 DoH 端点",
+                    selected = customEndpoint != null && current == customEndpoint,
+                    onClick = {
+                        customInput = customEndpoint.orEmpty()
+                        customError = null
+                        showCustomInput = true
+                    },
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("关闭") }
+        },
+    )
+
+    if (showCustomInput) {
+        AlertDialog(
+            onDismissRequest = { showCustomInput = false },
+            title = { Text("自定义 DoH 服务器") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = customInput,
+                        onValueChange = {
+                            customInput = it
+                            customError = null
+                        },
+                        singleLine = true,
+                        label = { Text("https://example.com/dns-query") },
+                        supportingText = { customError?.let { Text(it) } },
+                        isError = customError != null,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text(
+                        text = "需要支持 RFC 8484 wire format（application/dns-message）",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val trimmed = customInput.trim()
+                        if (!JunZi.Pixiv.data.network.DohEndpoints.isValidCustom(trimmed)) {
+                            customError = "请输入以 https:// 开头的 DoH 端点"
+                        } else {
+                            onChanged(trimmed)
+                            showCustomInput = false
+                            onDismiss()
+                        }
+                    },
+                ) { Text("保存") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCustomInput = false }) { Text("取消") }
+            },
+        )
+    }
+}
+
+@Composable
+private fun DohEndpointOption(
+    title: String,
+    subtitle: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .selectable(
+                selected = selected,
+                onClick = onClick,
+            )
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RadioButton(selected = selected, onClick = onClick)
+        Column(modifier = Modifier.padding(start = 4.dp)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }

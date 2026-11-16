@@ -475,5 +475,7 @@ data class SettingsUiState(
     val ugoiraSaveFormat: UgoiraSaveFormat = UgoiraSaveFormat.WEBP,
     val previewSwipeMode: PreviewSwipeMode = PreviewSwipeMode.Horizontal,
     val useThumbnailPreview: Boolean = true,
+    /** DoH 端点选择：JunZi.Pixiv.data.network.DohEndpoints.AUTO 或具体 URL。 */
+    val dohEndpoint: String = JunZi.Pixiv.data.network.DohEndpoints.AUTO,
 )
 

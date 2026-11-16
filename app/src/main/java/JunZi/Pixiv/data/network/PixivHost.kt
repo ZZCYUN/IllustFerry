@@ -10,16 +10,24 @@ package JunZi.Pixiv.data.network
 enum class PixivHost(
     val rawHost: String,
     val isApiHost: Boolean,
+    /**
+     * 该域名的服务位置：
+     *  - true  → Cloudflare（app-api / oauth / accounts / source / www / pixivision），
+     *    需要走 ECH 隧道（外层 SNI=cloudflare-ech.com，内层 SNI=本域名）
+     *  - false → pixiv Tokyo 自有源站（public-api / i.pximg / s.pximg），
+     *    走无 SNI 直连，靠 Host 头路由
+     */
+    val isCloudflareFronted: Boolean,
 ) {
-    AppApi("app-api.pixiv.net", true),
-    OAuth("oauth.secure.pixiv.net", true),
-    Accounts("accounts.pixiv.net", true),
-    Source("source.pixiv.net", true),
-    PublicApi("public-api.secure.pixiv.net", true),
-    Image("i.pximg.net", false),
-    StaticImage("s.pximg.net", false),
-    Pixivision("www.pixivision.net", false),
-    Web("www.pixiv.net", false);
+    AppApi("app-api.pixiv.net", true, true),
+    OAuth("oauth.secure.pixiv.net", true, true),
+    Accounts("accounts.pixiv.net", true, true),
+    Source("source.pixiv.net", true, true),
+    PublicApi("public-api.secure.pixiv.net", true, false),
+    Image("i.pximg.net", false, false),
+    StaticImage("s.pximg.net", false, false),
+    Pixivision("www.pixivision.net", false, true),
+    Web("www.pixiv.net", false, true);
 
     companion object {
         private val byHost = entries.associateBy { it.rawHost }

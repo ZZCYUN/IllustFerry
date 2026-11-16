@@ -122,6 +122,10 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
         PixivNetworkConfig.useHostIpRouting = useHostIpRouting
         PixivNetworkConfig.isVpnActive = isVpnActive()
         PixivNetworkConfig.replaceAll(store.readDynamicHostIps())
+        // DoH 端点选择与 ECH config 的持久化恢复（ECH 失效由 DohPreferences 的 TTL 控制）
+        val dohPrefs = JunZi.Pixiv.data.network.DohPreferences(application)
+        PixivNetworkConfig.echConfig = dohPrefs.echConfig
+        val dohEndpoint = dohPrefs.selectedEndpoint
         PixivImageProxy.useRemoteProxy = useRemoteImageProxy
         OkHttpProvider.ensureApiProxyRunning()
         _authState.update {
@@ -135,6 +139,7 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
             it.copy(
                 useHostIpRouting = useHostIpRouting,
                 useRemoteImageProxy = useRemoteImageProxy,
+                dohEndpoint = dohEndpoint,
                 imageProxyInput = imageProxyOrigin,
                 previewSwipeMode = previewSwipeMode,
                 saveUgoiraZip = saveUgoiraZip,

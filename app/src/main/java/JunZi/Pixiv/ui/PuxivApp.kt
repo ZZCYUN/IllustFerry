@@ -377,6 +377,7 @@ fun PuxivApp(viewModel: PixivViewModel) {
                 if (showMainShell) {
                     MainShell(
                         screen = mainShellScreen,
+                        dohEndpoint = settings.dohEndpoint,
                         home = home.home,
                         keyword = search.keyword,
                         isBusy = shell.isBusy,
@@ -560,6 +561,7 @@ internal fun MainShell(
     downloads: List<DownloadItem>,
     diagnostics: DiagnosticsState,
     useHostIpRouting: Boolean,
+    dohEndpoint: String,
     useRemoteImageProxy: Boolean,
     imageProxyInput: String,
     saveUgoiraZip: Boolean,
@@ -739,6 +741,7 @@ internal fun MainShell(
                 SettingsScreen(
                     diagnostics = diagnostics,
                     useHostIpRouting = useHostIpRouting,
+                    dohEndpoint = dohEndpoint,
                     useRemoteImageProxy = useRemoteImageProxy,
                     imageProxyInput = imageProxyInput,
                     saveUgoiraZip = saveUgoiraZip,
@@ -754,6 +757,7 @@ internal fun MainShell(
                     onRefreshDns = { viewModel.refreshDns(showMessage = true) },
                     onDiagnostics = viewModel::runDiagnostics,
                     onHostIpRoutingEnabledChange = viewModel::updateHostIpRoutingEnabled,
+                    onDohEndpointChange = viewModel::updateDohEndpoint,
                     onPreviewSwipeModeChange = viewModel::updatePreviewSwipeMode,
                     onThemeModeChange = viewModel::updateThemeMode,
                     onMaterialYouEnabledChange = viewModel::updateMaterialYouEnabled,

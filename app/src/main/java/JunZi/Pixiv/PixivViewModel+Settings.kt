@@ -1,5 +1,7 @@
 package JunZi.Pixiv
 
+import android.app.Application
+
 import JunZi.Pixiv.data.network.PixivImageProxy
 import JunZi.Pixiv.data.network.PixivNetworkConfig
 import androidx.lifecycle.viewModelScope
@@ -59,7 +61,32 @@ internal fun PixivViewModel.updateUgoiraSaveFormat(format: UgoiraSaveFormat) {
     _settingsState.update { it.copy(ugoiraSaveFormat = format) }
     showMessage("动图保存格式已设置为 ${format.name}")
 }
+internal fun PixivViewModel.updateDohEndpoint(value: String) {
+    val prefs = JunZi.Pixiv.data.network.DohPreferences(getApplication<Application>())
+    // 自定义端点（不在内置列表里）单独留存，供选择框回显。
+    if (value != JunZi.Pixiv.data.network.DohEndpoints.AUTO &&
+        JunZi.Pixiv.data.network.DohEndpoints.sourceOf(value) == null
+    ) {
+        prefs.customEndpoint = value
+    }
+    prefs.selectedEndpoint = value
+    // 换端点后旧的 working endpoint 记录失效，让刷新流程重新探测。
+    prefs.workingEndpoint = null
+    _settingsState.update { it.copy(dohEndpoint = value) }
+    showMessage(
+        if (value == JunZi.Pixiv.data.network.DohEndpoints.AUTO) {
+            "DoH 已切换为自动（按列表顺序探测）"
+        } else {
+            "DoH 已切换为 $value"
+        }
+    )
+    viewModelScope.launch { warmupDnsIfNeeded(forceRefresh = true) }
+}
 internal fun PixivViewModel.updateImageProxyEnabled(enabled: Boolean) {
+    if (enabled && !PixivImageProxy.hasActiveProxy) {
+        showMessage("请先在下方填写图片代理地址")
+        return
+    }
     PixivImageProxy.useRemoteProxy = enabled
     store.saveUseRemoteImageProxy(enabled)
     _settingsState.update { it.copy(useRemoteImageProxy = enabled) }

@@ -1,13 +1,13 @@
 # IllustFerry
 
-IllustFerry（画渡）是一个面向 pixiv 的非官方 Android 客户端实验项目，面向中文用户在复杂网络环境中的日常浏览体验，重点是本地网络兼容代理、可配置 Host IP 路由、图片加载 fallback，以及 Jetpack Compose 客户端界面。
+IllustFerry（画渡）是一个面向 pixiv 的非官方 Android 客户端实验项目，面向中文用户在复杂网络环境中的日常浏览体验，重点是网络兼容直连、本地代理与图片加载 fallback，以及 Jetpack Compose 客户端界面。
 
 本项目与 pixiv Inc. 无关，不包含 pixiv 作品内容、用户数据、调试日志或固定代理 CA / 代理私钥。仓库中的 Android 测试签名配置仅用于调试和打包示例，正式分发请替换为自己的签名密钥。
 
 ## 功能
 
 - 登录：应用内 WebView OAuth 登录代理、手动 token 登录，运行时生成内存 CA，不分发固定代理证书。
-- 网络兼容：所有 pixiv 域名请求统一走内置 7891 中间人代理（MITM），通过 DoH 端点实时刷新可用 IP 并过滤无效地址，图片直连 / 备用 Host / 远端图片代理 fallback。
+- 网络兼容：所有 pixiv 域名请求统一走内置 7891 中间人代理（MITM），各域名按其服务位置自动选择兼容直连策略并按可用性回退；地址解析与握手配置均通过加密 DNS 实时获取并持久化，图片支持手动配置远端代理 fallback。
 - 首页：插画、漫画、小说分栏浏览，支持推荐、排行榜、最新作品和搜索入口。
 - 发现：公开关注作品、悄悄关注作品、趋势标签、标签/标题/作者/小说搜索、热门预览、搜索结果分页自动加载，并可从搜索结果返回关注作品列表。
 - 搜索筛选：搜索目标、排序方式、日期范围、收藏数阈值等参数会随搜索刷新。
@@ -17,46 +17,20 @@ IllustFerry（画渡）是一个面向 pixiv 的非官方 Android 客户端实�
 - 我的：个人作品、插画/小说收藏列表、浏览历史、公开/悄悄关注用户列表、下载记录和基础投稿面板。
 - 下载：多图作品保留全部分页，小说保存为 TXT，已下载内容支持离线本地预览；GIF / 动 WebP 预览保持动画播放。
 - 动图：支持 WebP / GIF 输出，并可按需额外保留 pixiv 原始 zip。
-- 设置：Host/IP 路由、图片代理、过滤标签、预览方向、动图格式、保留 zip、网络诊断和开源许可查看。
+- 设置：Host/IP 路由、DoH 服务器选择（内置多个公共 DoH，支持自定义输入）、图片代理（手动配置）、过滤标签、预览方向、动图格式、保留 zip、网络诊断和开源许可查看。
 - 实验功能：设置页可进入"Web Pixiv"，使用应用内置代理 WebView 直接访问 pixiv.net 官网。
 
 ## 网络兼容设计
 
-网络层是本项目的核心：
+网络层是本项目的核心。不同 pixiv 域名的服务位置不同，网络层会按域名自动选择对应的兼容直连策略，并在多种策略间按可用性回退：
 
-- `LocalPixivProxy`：进程内 7891 中间人代理（MITM），统一承接 OkHttp 与 WebView 的 pixiv 域名流量，对域名解析敏感的上游做无 SNI 握手兜底。
-- `OkHttpProvider`：API / 图片 OkHttpClient 统一挂载内置 MITM 代理，不再做 host→IP 改写拦截。
-- `PixivHost` / `PixivNetworkConfig`：pixiv Host 清单与运行时 IP 配置，写入时过滤环回 / 私有 / 保留等无效地址，避免污染记录进表。
-- `PixivDnsUpdater`：通过外部 DoH 端点实时刷新可用 IP。
-- `PixivImageProxy`：处理图片直连、备用 Host、默认远端代理与手动代理候选。
-- `PixivUnsafeTls`：为兼容路径放宽证书与 Hostname 校验。
+- `PixivDnsUpdater`：通过加密 DNS（RFC 8484）实时解析各域名的地址记录并持久化；握手所需的 TLS 扩展配置也从加密 DNS 的记录中自动获取。端点支持自动探测与手动指定，失效后自动重新探测。
+- `echtunnel`（Go + gomobile）：基于 Go 标准加密库编译的传输层，对上游连接按域名启用相应的 TLS 握手策略（部分域名启用加密握手扩展，部分域名跳过握手可见字段），证书均做完整校验。
+- `LocalPixivProxy`：进程内 7891 中间人代理（MITM），统一承接 OkHttp 与 WebView 的 pixiv 域名流量，上游连接全部由上述传输层完成。
+- `PixivHost` / `PixivNetworkConfig`：pixiv Host 清单与运行时地址配置，写入时过滤环回 / 私有 / 保留等无效地址。
+- `PixivImageProxy`：图片默认直连；应用不内置任何远端图片代理，可在设置页手动输入代理地址，开启后按可用性回退。
 
-默认远端图片代理为 `https://i.yuki.sh`。感谢 [Yuki 妙妙屋](https://blog.yuki.sh/) 提供图片代理服务。
-
-也可以在应用设置页手动输入图片代理地址。输入 `i.example.com` 这类域名时会自动按 `https://i.example.com` 保存；代理需要兼容 pixiv 图片原路径，例如 `/img-original/...`、`/img-master/...` 等。
-
-### DNS 刷新接口
-
-`PixivDnsUpdater` 默认请求 `https://api.sb6.me/getdnsipv4`，通过 `host` 查询参数获取目标域名的 IPv4 A 记录。我的 `getdnsipv4` 服务端源码如下：
-
-```php
-<?php
-$host = isset($_GET['host']) ? trim($_GET['host']) : '';
-$records = dns_get_record($host, DNS_A);
-if ($records === false) {
-    $ips = [];
-} else {
-    foreach ($records as $record) {
-        if ($record['type'] === 'A' && isset($record['ip'])) {
-            $ips[] = $record['ip'];
-        }
-    }
-}
-echo json_encode($ips);
-?>
-```
-
-这段代码只返回 A 记录中的 IPv4 地址数组。若公开部署，建议根据自己的需求补充 `host` 格式校验、白名单或限流。
+具体实现细节请直接阅读源码。内置的 DNS 端点均来自公开的公共服务，可在设置页更换或填入自定义端点。
 
 ## 技术栈
 

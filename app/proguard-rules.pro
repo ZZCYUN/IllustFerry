@@ -9,8 +9,13 @@
 
 # Gson models are read reflectively and many fields are only referenced by serialized names.
 -keep class JunZi.Pixiv.data.model.** { *; }
--keep class JunZi.Pixiv.data.network.PixivDnsUpdater$DnsJsonResponse { *; }
--keep class JunZi.Pixiv.data.network.PixivDnsUpdater$DnsAnswer { *; }
+
+# ECH tunnel: JNI binds by exact symbol name (Java_JunZi_Pixiv_data_network_EchTunnel_*),
+# so neither the class nor the native methods may be renamed or stripped.
+-keep class JunZi.Pixiv.data.network.EchTunnel { *; }
+-keepclassmembers class JunZi.Pixiv.data.network.EchTunnel {
+    native <methods>;
+}
 
 # SharedPreferences payloads also round-trip through Gson in release builds.
 -keep class JunZi.Pixiv.AuthSession { *; }
