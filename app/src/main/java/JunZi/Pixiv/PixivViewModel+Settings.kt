@@ -83,14 +83,16 @@ internal fun PixivViewModel.updateDohEndpoint(value: String) {
     viewModelScope.launch { warmupDnsIfNeeded(forceRefresh = true) }
 }
 internal fun PixivViewModel.updateImageProxyEnabled(enabled: Boolean) {
-    if (enabled && !PixivImageProxy.hasActiveProxy) {
-        showMessage("请先在下方填写图片代理地址")
-        return
-    }
     PixivImageProxy.useRemoteProxy = enabled
     store.saveUseRemoteImageProxy(enabled)
     _settingsState.update { it.copy(useRemoteImageProxy = enabled) }
-    showMessage(if (enabled) "使用代理获取图片，可能更快" else "使用官方链接进行获取图片")
+    showMessage(
+        when {
+            enabled && !PixivImageProxy.hasActiveProxy -> "已开启，请在下方填写图片代理地址后保存"
+            enabled -> "使用代理获取图片，可能更快"
+            else -> "使用官方链接进行获取图片"
+        }
+    )
 }
 internal fun PixivViewModel.updateHostIpRoutingEnabled(enabled: Boolean) {
     PixivNetworkConfig.useHostIpRouting = enabled
