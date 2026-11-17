@@ -652,7 +652,7 @@ internal fun MainShell(
                 state = pagerState,
                 modifier = Modifier.fillMaxSize(),
                 beyondViewportPageCount = 2,
-                userScrollEnabled = false,
+                userScrollEnabled = true,
                 key = { index -> mainScreens[index].name },
             ) { page ->
                 when (mainScreens[page]) {
