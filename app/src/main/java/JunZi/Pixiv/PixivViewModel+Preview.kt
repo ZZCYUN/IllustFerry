@@ -1,12 +1,19 @@
 package JunZi.Pixiv
 
+import android.net.Uri
 import androidx.lifecycle.viewModelScope
+import JunZi.Pixiv.data.UgoiraStage
 import JunZi.Pixiv.data.model.Illust
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 internal fun PixivViewModel.openFullScreenPreview(startIndex: Int = _previewState.value.selectedImageIndex) {
     _previewState.update { state ->
+        // 动图在帧就绪前不进全屏：此时全屏组件会退回静态分支，看起来像没反应，
+        // 但 isFullScreenPreview 已置 true，会白白吃掉一次返回键。
+        if (state.selectedIllust?.isUgoira == true && state.ugoiraFrames.isEmpty()) {
+            return@update state
+        }
         val size = state.selectedIllust?.previewImageCount() ?: 0
         state.copy(
             selectedImageIndex = startIndex.coerceIn(0, (size - 1).coerceAtLeast(0)),
@@ -44,6 +51,8 @@ internal fun PixivViewModel.openPreview(illust: Illust, alreadyFetchedDetail: Bo
             ugoiraFrames = emptyList(),
             ugoiraLoadedFrames = 0,
             ugoiraTotalFrames = 0,
+            ugoiraStage = null,
+            ugoiraStageProgress = 0f,
             previewReturnScreen = returnScreen,
         )
     }
@@ -98,7 +107,8 @@ internal fun PixivViewModel.openDownloadedPreview(item: DownloadItem) {
     val currentScreen = _shellState.value.screen
     val returnScreen = currentScreen.takeIf { it != AppScreen.Preview } ?: _previewState.value.previewReturnScreen
     val localIllust = sourceIllust.copy(
-        type = if (item.isUgoira) "illust" else sourceIllust.type,
+        // 本地动图保持 ugoira 标记，预览页据此走本地动图播放分支（webp/gif 直接播放）。
+        type = if (item.isUgoira) "ugoira" else sourceIllust.type,
         previewUrl = firstSavedUri,
         imageUrls = savedUris,
         imagePages = savedUris.map {
@@ -133,11 +143,44 @@ internal fun PixivViewModel.openDownloadedPreview(item: DownloadItem) {
     }
     _shellState.update { it.copy(screen = AppScreen.Preview) }
     showMessage(null)
+    if (item.isUgoira) {
+        // 本地动图：把保存的动 WebP 解码成帧，预览页据此直接播放动画。
+        loadLocalUgoiraFrames(item.illustId, firstSavedUri)
+    }
     if (item.illustId > 0L) {
         loadSelectedBookmarkDetail(item.illustId, force = true)
         loadRelatedFeed(item.illustId, refresh = true)
         loadComments(item.illustId)
         saveHistory(localIllust)
+    }
+}
+
+/**
+ * 解码本地动图文件并填入预览状态。
+ *
+ * 注意不要在此期间置 isPreviewLoading：本地动图进入预览时 ugoiraFrames 还是空的，
+ * 一旦置 loading，预览页会先渲染可点击的 HorizontalImagePreview，用户此时点一下
+ * 就会触发 onOpenFullScreen（但全屏组件因无帧而退回静态分支，看起来没反应），
+ * 而 isFullScreenPreview 已被置 true，导致首次返回键被 closeFullScreenPreview 吃掉。
+ */
+internal fun PixivViewModel.loadLocalUgoiraFrames(illustId: Long, uri: String) {
+    viewModelScope.launch {
+        val frames = runCatching { repository.decodeLocalAnimatedWebp(Uri.parse(uri)) }
+            .getOrDefault(emptyList())
+        _previewState.update {
+            if (it.selectedIllust?.id == illustId) {
+                it.copy(
+                    ugoiraFrames = frames,
+                    ugoiraLoadedFrames = frames.size,
+                    ugoiraTotalFrames = frames.size,
+                    ugoiraStage = UgoiraStage.Encode,
+                    ugoiraStageProgress = 1f,
+                    isPreviewLoading = false,
+                )
+            } else {
+                it
+            }
+        }
     }
 }
 internal fun PixivViewModel.openPreviewById(illustId: Long, fullScreen: Boolean = false) {
@@ -246,15 +289,28 @@ internal fun PixivViewModel.loadUgoiraFrames(illustId: Long) {
     viewModelScope.launch {
         runCatching {
             withAccessToken { token ->
-                repository.ugoiraFrames(illustId, token) { loaded, total ->
-                    _previewState.update {
-                        if (it.selectedIllust?.id == illustId) {
-                            it.copy(ugoiraLoadedFrames = loaded, ugoiraTotalFrames = total)
-                        } else {
-                            it
+                repository.ugoiraFrames(
+                    id = illustId,
+                    token = token,
+                    onProgress = { loaded, total ->
+                        _previewState.update {
+                            if (it.selectedIllust?.id == illustId) {
+                                it.copy(ugoiraLoadedFrames = loaded, ugoiraTotalFrames = total)
+                            } else {
+                                it
+                            }
                         }
-                    }
-                }
+                    },
+                    onStage = { stage, fraction ->
+                        _previewState.update {
+                            if (it.selectedIllust?.id == illustId) {
+                                it.copy(ugoiraStage = stage, ugoiraStageProgress = fraction)
+                            } else {
+                                it
+                            }
+                        }
+                    },
+                )
             }
         }
             .onSuccess { frames ->

@@ -267,6 +267,8 @@ data class DownloadItem(
     val pageCount: Int = 1,
     val relativePath: String = "",
     val detail: String = "",
+    /** 当前阶段进度 0f..1f；null 表示无确定进度（显示不确定进度条）。 */
+    val progress: Float? = null,
     val savedUri: String? = null,
     val savedUris: List<String> = emptyList(),
     val zipSavedUri: String? = null,
@@ -439,6 +441,10 @@ data class PreviewUiState(
     val ugoiraFrames: List<UgoiraFrameImage> = emptyList(),
     val ugoiraLoadedFrames: Int = 0,
     val ugoiraTotalFrames: Int = 0,
+    /** 动图加载阶段：null = 尚未开始，Download = 拉取源文件，Encode = 解帧。 */
+    val ugoiraStage: JunZi.Pixiv.data.UgoiraStage? = null,
+    /** 当前阶段内进度 0f..1f。 */
+    val ugoiraStageProgress: Float = 0f,
     val isFullScreenPreview: Boolean = false,
     val isPreviewLoading: Boolean = false,
 )

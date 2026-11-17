@@ -382,16 +382,36 @@ class PixivRepository(
         api.unfollowUser(userId, token)
     }
 
+    /**
+     * 拉取并解码动图帧。整个过程分两个阶段，各自从 0 走到 1：
+     * - [UgoiraStage.Download]：下载 pixiv 原始 zip，按字节数上报
+     * - [UgoiraStage.Encode]：解压并逐帧解码，按帧数上报
+     */
     suspend fun ugoiraFrames(
         id: Long,
         token: String,
         onProgress: (Int, Int) -> Unit = { _, _ -> },
+        onStage: (UgoiraStage, Float) -> Unit = { _, _ -> },
     ): List<UgoiraFrameImage> = withContext(Dispatchers.IO) {
         val metadata = api.ugoiraMetadata(id, token).metadata ?: return@withContext emptyList()
         val zipUrl = metadata.zipUrls.bestOriginal() ?: return@withContext emptyList()
         val expectedFrames = metadata.frames.orEmpty().size.coerceAtLeast(1)
+
+        // 阶段一：下载整包 zip，按字节进度上报（此前这里没有进度回调，进度条会一直卡 0）。
+        onStage(UgoiraStage.Download, 0f)
+        val zipBytes = api.downloadImageBytes(zipUrl) { downloaded, total ->
+            if (total > 0) {
+                onStage(
+                    UgoiraStage.Download,
+                    (downloaded.toDouble() / total.toDouble()).toFloat().coerceIn(0f, 1f),
+                )
+            }
+        }
+        onStage(UgoiraStage.Download, 1f)
+
+        // 阶段二：解压 + 逐帧解码，按帧进度上报。
+        onStage(UgoiraStage.Encode, 0f)
         onProgress(0, expectedFrames)
-        val zipBytes = api.downloadImageBytes(zipUrl)
         val delays = metadata.frames.orEmpty().associate { (it.file.orEmpty()) to (it.delay ?: 80) }
         val frames = mutableListOf<UgoiraFrameImage>()
 
@@ -407,11 +427,17 @@ class PixivRepository(
                             delayMs = delays[entry.name] ?: 80,
                         )
                         onProgress(frames.size, expectedFrames)
+                        onStage(
+                            UgoiraStage.Encode,
+                            (frames.size.toDouble() / expectedFrames.toDouble())
+                                .toFloat().coerceIn(0f, 1f),
+                        )
                     }
                 }
                 zip.closeEntry()
             }
         }
+        onStage(UgoiraStage.Encode, 1f)
 
         frames
     }
@@ -422,6 +448,43 @@ class PixivRepository(
         api.downloadImageBytes(zipUrl)
     }
 
+    /**
+     * 把本地已保存的动图文件（动 WebP）解码成帧序列，供预览页直接播放。
+     * GIF 由 Glide 的 GifDrawable 负责，这里只处理本项目合成的动 WebP。
+     */
+    suspend fun decodeLocalAnimatedWebp(uri: Uri): List<UgoiraFrameImage> = withContext(Dispatchers.IO) {
+        val ctx = appContext ?: return@withContext emptyList()
+        val frames = mutableListOf<UgoiraFrameImage>()
+        val decoder = com.aureusapps.android.webpandroid.decoder.WebPDecoder(ctx)
+        try {
+            decoder.setDataSource(uri)
+            val info = runCatching { decoder.decodeInfo() }.getOrNull()
+            if (info?.hasAnimation != true) return@withContext emptyList()
+            val count = info.frameCount.coerceAtLeast(1)
+            var lastTimestamp = 0
+            while (decoder.hasNextFrame()) {
+                val result = runCatching { decoder.decodeNextFrame() }.getOrNull() ?: break
+                val bitmap = result.frame ?: break
+                // WebP 帧时间戳是累计毫秒；换算成本帧停留时长。
+                val timestamp = result.timestamp
+                val delayMs = (timestamp - lastTimestamp).coerceIn(16, 10_000)
+                lastTimestamp = timestamp
+                frames += UgoiraFrameImage(bitmap = bitmap, delayMs = delayMs)
+                if (frames.size >= count) break
+            }
+        } catch (_: Throwable) {
+            // 解码失败时返回已拿到的帧；全失败则空列表，预览页回退为静态图。
+        } finally {
+            runCatching { decoder.release() }
+        }
+        frames
+    }
+
+    /**
+     * 下载并合成动图。整个流程分两个阶段，各自从 0 走到 1：
+     * - [UgoiraStage.Download]：拉取 pixiv 原始 zip 包，按字节数上报进度
+     * - [UgoiraStage.Encode]：逐帧解码 + 合成 WebP/GIF，按帧数上报进度
+     */
     suspend fun downloadUgoira(
         id: Long,
         token: String,
@@ -429,6 +492,7 @@ class PixivRepository(
         workingDirectory: File,
         saveFormat: UgoiraSaveFormat = UgoiraSaveFormat.WEBP,
         onProgress: (String, Int, Int) -> Unit = { _, _, _ -> },
+        onStage: (UgoiraStage, Float) -> Unit = { _, _ -> },
     ): UgoiraDownloadResult = withContext(Dispatchers.IO) {
         val metadata = api.ugoiraMetadata(id, token).metadata ?: throw IllegalStateException("未能取得动画元数据")
         val zipUrl = metadata.zipUrls.bestOriginal() ?: throw IllegalStateException("未能取得动画下载地址")
@@ -436,23 +500,44 @@ class PixivRepository(
         val expectedFrames = framesMeta.size.coerceAtLeast(1)
         val delays = framesMeta.associate { (it.file.orEmpty()) to (it.delay ?: 80) }
 
+        // 阶段一：整包下载，按字节进度上报。
+        onStage(UgoiraStage.Download, 0f)
         onProgress("下载动图源文件", 0, expectedFrames)
-        val zipBytes = api.downloadImageBytes(zipUrl)
+        val zipBytes = api.downloadImageBytes(zipUrl) { downloaded, total ->
+            if (total > 0) {
+                val fraction = (downloaded.toDouble() / total.toDouble()).toFloat().coerceIn(0f, 1f)
+                onStage(UgoiraStage.Download, fraction)
+                onProgress("下载动图源文件", (downloaded / 1024).toInt(), (total / 1024).toInt())
+            } else {
+                onProgress("下载动图源文件", (downloaded / 1024).toInt(), 0)
+            }
+        }
+        onStage(UgoiraStage.Download, 1f)
+
+        // 阶段二：逐帧合成，按帧进度上报。
         val workDir = File(workingDirectory, "ugoira_${id}_${System.nanoTime()}").apply { mkdirs() }
         val encodedBytes = try {
+            onStage(UgoiraStage.Encode, 0f)
+            val encodeProgress: (String, Int, Int) -> Unit = { stage, current, total ->
+                onProgress(stage, current, total)
+                if (total > 0) {
+                    onStage(UgoiraStage.Encode, (current.toDouble() / total.toDouble()).toFloat().coerceIn(0f, 1f))
+                }
+            }
             when (saveFormat) {
                 UgoiraSaveFormat.WEBP -> encodeWebPFromZip(
                     requireNotNull(appContext) { "WebP 编码需要 Android Context" },
                     zipBytes,
                     delays,
                     expectedFrames,
-                    onProgress,
+                    encodeProgress,
                 )
-                UgoiraSaveFormat.GIF -> encodeGifFromZip(zipBytes, delays, expectedFrames, onProgress)
+                UgoiraSaveFormat.GIF -> encodeGifFromZip(zipBytes, delays, expectedFrames, encodeProgress)
             }
         } finally {
             workDir.deleteRecursively()
         }
+        onStage(UgoiraStage.Encode, 1f)
         UgoiraDownloadResult(
             animatedBytes = encodedBytes,
             format = saveFormat,
@@ -478,6 +563,14 @@ class PixivRepository(
 
     suspend fun downloadImageBytes(url: String): ByteArray {
         return api.downloadImageBytes(url)
+    }
+
+    /** 带字节进度的图片下载，用于下载列表的逐张进度展示。 */
+    suspend fun downloadImageBytes(
+        url: String,
+        onBytes: (downloaded: Long, total: Long) -> Unit,
+    ): ByteArray {
+        return api.downloadImageBytes(url, onBytes)
     }
 
     private fun JunZi.Pixiv.data.model.OAuthTokenResponse.toSession(fallbackRefreshToken: String?): AuthSession {
@@ -512,6 +605,12 @@ data class UgoiraDownloadResult(
     val format: UgoiraSaveFormat,
     val zipBytes: ByteArray?,
 )
+
+/** 动图处理的两个阶段：先整包下载，再逐帧合成。 */
+enum class UgoiraStage {
+    Download,
+    Encode,
+}
 
 private data class UgoiraDiskFrame(
     val file: File,

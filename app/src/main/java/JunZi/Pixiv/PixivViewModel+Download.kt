@@ -4,6 +4,7 @@ import android.app.Application
 import android.net.Uri
 import android.os.Environment
 import androidx.lifecycle.viewModelScope
+import JunZi.Pixiv.data.UgoiraStage
 import JunZi.Pixiv.data.model.Illust
 import JunZi.Pixiv.data.model.UploadIllustRequest
 import JunZi.Pixiv.data.model.UploadNovelRequest
@@ -249,6 +250,9 @@ internal fun PixivViewModel.startDownload(item: DownloadItem, illust: Illust) {
         }
         runCatching {
             if (illust.isUgoira) {
+                // 当前阶段名 + 阶段内进度，供 UI 渲染「下载 / 合成」两段进度条。
+                var stageLabel = "下载动图源文件"
+                var stageProgress: Float? = null
                 val result = withAccessToken { token ->
                     repository.downloadUgoira(
                         id = illust.id,
@@ -256,18 +260,38 @@ internal fun PixivViewModel.startDownload(item: DownloadItem, illust: Illust) {
                         includeZip = _settingsState.value.saveUgoiraZip,
                         workingDirectory = getApplication<Application>().cacheDir,
                         saveFormat = _settingsState.value.ugoiraSaveFormat,
-                    ) { stage, current, total ->
-                        val detail = when {
-                            total > 0 -> "$stage $current/$total"
-                            else -> stage
-                        }
-                        updateDownload(item.key, persist = false) {
-                            it.copy(
-                                status = DownloadStatus.Running,
-                                detail = detail,
-                            )
-                        }
-                    }
+                        onProgress = { stage, current, total ->
+                            stageLabel = stage
+                            // 合成阶段按帧计数更有意义；下载阶段用百分比（onStage 驱动）。
+                            if (stage.contains("合成") || stage.contains("帧")) {
+                                val detail = when {
+                                    total > 0 -> "$stage $current/$total"
+                                    else -> stage
+                                }
+                                updateDownload(item.key, persist = false) {
+                                    it.copy(
+                                        status = DownloadStatus.Running,
+                                        detail = detail,
+                                        progress = stageProgress,
+                                    )
+                                }
+                            }
+                        },
+                        onStage = { stage, fraction ->
+                            stageProgress = fraction
+                            stageLabel = when (stage) {
+                                UgoiraStage.Download -> "下载动图源文件"
+                                UgoiraStage.Encode -> "合成动图"
+                            }
+                            updateDownload(item.key, persist = false) {
+                                it.copy(
+                                    status = DownloadStatus.Running,
+                                    detail = "${stageLabel} ${(fraction * 100).toInt()}%",
+                                    progress = fraction,
+                                )
+                            }
+                        },
+                    )
                 }
                 updateDownload(item.key, persist = false) {
                     it.copy(
@@ -305,13 +329,28 @@ internal fun PixivViewModel.startDownload(item: DownloadItem, illust: Illust) {
                 val pages = illust.imageUrls.ifEmpty { listOfNotNull(illust.previewUrl) }
                 val savedUris = mutableListOf<Uri>()
                 pages.forEachIndexed { index, imageUrl ->
+                    // 每张图独立一条进度：进度条在该张开始时清零、下载完成时走满。
                     updateDownload(item.key, persist = false) {
                         it.copy(
                             status = DownloadStatus.Running,
-                            detail = "下载第 ${index + 1}/${pages.size} 张",
+                            detail = if (pages.size > 1) {
+                                "下载第 ${index + 1}/${pages.size} 张"
+                            } else {
+                                "下载中"
+                            },
+                            progress = 0f,
                         )
                     }
-                    val bytes = repository.downloadImageBytes(imageUrl)
+                    val bytes = repository.downloadImageBytes(imageUrl) { downloaded, total ->
+                        if (total > 0) {
+                            updateDownload(item.key, persist = false) { current ->
+                                current.copy(
+                                    progress = (downloaded.toDouble() / total.toDouble())
+                                        .toFloat().coerceIn(0f, 1f),
+                                )
+                            }
+                        }
+                    }
                     val savedUri = saveDownloadBytes(
                         item.relativePath,
                         "${(index + 1).toString().padStart(2, '0')}${imageUrl.fileExtension()}",

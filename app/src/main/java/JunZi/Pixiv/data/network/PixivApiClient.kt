@@ -695,6 +695,35 @@ class PixivApiClient(
         }
     }
 
+    /**
+     * 带字节进度的下载。[onBytes] 回调 (已下载字节, 总字节或 -1)。
+     * 总字节未知时按 Content-Length 缺失处理，调用方自行决定进度展示方式。
+     */
+    suspend fun downloadImageBytes(
+        url: String,
+        onBytes: (downloaded: Long, total: Long) -> Unit,
+    ): ByteArray = withContext(Dispatchers.IO) {
+        val request = Request.Builder().url(PixivImageProxy.requireProxied(url)).build()
+        currentImageClient().newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw IOException("HTTP ${response.code}: ${response.message}")
+            val body = response.body
+            val total = body.contentLength()
+            val buffer = ByteArray(64 * 1024)
+            val sink = java.io.ByteArrayOutputStream(if (total in 1..Int.MAX_VALUE.toLong()) total.toInt() else 256 * 1024)
+            var downloaded = 0L
+            body.byteStream().use { input ->
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read == -1) break
+                    sink.write(buffer, 0, read)
+                    downloaded += read
+                    onBytes(downloaded, total)
+                }
+            }
+            sink.toByteArray()
+        }
+    }
+
     suspend fun probeImage(url: String): Unit = withContext(Dispatchers.IO) {
         val request = Request.Builder()
             .url(PixivImageProxy.requireProxied(url))

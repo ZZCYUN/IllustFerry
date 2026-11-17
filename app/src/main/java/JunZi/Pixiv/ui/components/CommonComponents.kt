@@ -432,9 +432,29 @@ internal fun PagingFooter(
     }
 }
 
-internal fun Illust.previewUrls(useThumbnail: Boolean = false): List<String> =
-    if (useThumbnail && thumbnailUrls.isNotEmpty()) thumbnailUrls
-    else imageUrls.ifEmpty { listOfNotNull(previewUrl) }
+/**
+ * 预览页要展示的图片 URL。
+ *
+ * 缩略图开关只应影响在线远程图片；本地已保存文件（content:// / file://）必须
+ * 直接使用 [imageUrls]，否则会把下载项继承来的远程 [thumbnailUrls] 换进去，
+ * 导致本地预览加载失败、全屏入口失效。
+ */
+internal fun Illust.previewUrls(useThumbnail: Boolean = false): List<String> {
+    val local = imageUrls.ifEmpty { listOfNotNull(previewUrl) }
+    if (local.isNotEmpty() && local.all { it.isLocalUri() }) return local
+    return if (useThumbnail && thumbnailUrls.isNotEmpty()) thumbnailUrls else local
+}
+
+private fun String.isLocalUri(): Boolean =
+    startsWith("content://", ignoreCase = true) ||
+        startsWith("file://", ignoreCase = true) ||
+        startsWith("android.resource://", ignoreCase = true)
+
+/** 是否本地已下载作品（所有图片地址都是本地 URI）。 */
+internal fun isLocalIllust(illust: Illust): Boolean {
+    val urls = illust.imageUrls.ifEmpty { listOfNotNull(illust.previewUrl) }
+    return urls.isNotEmpty() && urls.all { it.isLocalUri() }
+}
 
 internal fun MyState.bookmarkFeed(feed: BookmarkFeed): FeedState {
     return when (feed) {
@@ -518,6 +538,8 @@ internal fun IllustMeta(
     related: FeedState,
     bookmarkTags: List<String>,
     selectedBookmark: SelectedBookmarkState,
+    /** 本地已下载作品：隐藏下载入口（再下载一次没有意义）。 */
+    hideDownload: Boolean = false,
     onBookmarkPublic: (List<String>) -> Unit,
     onBookmarkPrivate: (List<String>) -> Unit,
     onAddBookmarkTags: (List<String>) -> Unit,
@@ -582,15 +604,17 @@ internal fun IllustMeta(
                 )
                 }
             }
-            IconButton(
-                onClick = onDownload,
-                enabled = actionsEnabled,
-            ) {
-                Icon(
-                    Icons.Default.Download,
-                    contentDescription = "下载",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            if (!hideDownload) {
+                IconButton(
+                    onClick = onDownload,
+                    enabled = actionsEnabled,
+                ) {
+                    Icon(
+                        Icons.Default.Download,
+                        contentDescription = "下载",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             BookmarkActionButton(
                 isBookmarked = illust.isBookmarked,
@@ -1189,10 +1213,16 @@ internal val Illust.typeLabel: String
         else -> "插画"
     }
 
+/**
+ * 动图加载进度。整条链路分两段：先下载原始 zip，再解压逐帧解码。
+ * 两段各自从 0 走到 100%，进度环在阶段切换时清空重走；文案同步切换阶段名。
+ */
 @Composable
 internal fun UgoiraLoadingProgress(
     loaded: Int,
     total: Int,
+    stage: JunZi.Pixiv.data.UgoiraStage? = null,
+    stageProgress: Float = 0f,
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -1206,10 +1236,28 @@ internal fun UgoiraLoadingProgress(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            val progress = if (total > 0) loaded.toFloat() / total.toFloat() else 0f
-            CircularProgressIndicator(progress = { progress.coerceIn(0f, 1f) }, strokeWidth = 3.dp)
+            // 下载阶段用字节进度，解码阶段用帧进度；两者都在各自阶段内 0→1。
+            val progress = when (stage) {
+                JunZi.Pixiv.data.UgoiraStage.Download -> stageProgress
+                JunZi.Pixiv.data.UgoiraStage.Encode ->
+                    if (total > 0) loaded.toFloat() / total.toFloat() else stageProgress
+                null -> if (total > 0) loaded.toFloat() / total.toFloat() else 0f
+            }
+            CircularProgressIndicator(
+                progress = { progress.coerceIn(0f, 1f) },
+                strokeWidth = 3.dp,
+            )
+            val label = when (stage) {
+                JunZi.Pixiv.data.UgoiraStage.Download -> "下载动图"
+                JunZi.Pixiv.data.UgoiraStage.Encode -> "解析动图"
+                null -> "加载动画"
+            }
             Text(
-                text = if (total > 0) "加载动画 $loaded / $total" else "加载动画中",
+                text = when {
+                    stage == JunZi.Pixiv.data.UgoiraStage.Encode && total > 0 -> "$label $loaded / $total"
+                    progress > 0f -> "$label ${(progress * 100).toInt()}%"
+                    else -> label
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

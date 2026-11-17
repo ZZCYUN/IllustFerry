@@ -390,6 +390,7 @@ internal fun PreviewScreen(
                                 related = preview.related,
                                 bookmarkTags = bookmarkTags,
                                 selectedBookmark = preview.selectedBookmark,
+                                hideDownload = isLocalIllust(illust),
                                 onBookmarkPublic = onBookmarkPublic,
                                 onBookmarkPrivate = onBookmarkPrivate,
                                 onAddBookmarkTags = onAddBookmarkTags,
@@ -458,6 +459,8 @@ internal fun PreviewScreen(
                                         UgoiraLoadingProgress(
                                             loaded = preview.ugoiraLoadedFrames,
                                             total = preview.ugoiraTotalFrames,
+                                            stage = preview.ugoiraStage,
+                                            stageProgress = preview.ugoiraStageProgress,
                                             modifier = Modifier.align(Alignment.Center),
                                         )
                                     } else {
@@ -473,6 +476,7 @@ internal fun PreviewScreen(
                                 related = preview.related,
                                 bookmarkTags = bookmarkTags,
                                 selectedBookmark = preview.selectedBookmark,
+                                hideDownload = isLocalIllust(illust),
                                 onBookmarkPublic = onBookmarkPublic,
                                 onBookmarkPrivate = onBookmarkPrivate,
                                 onAddBookmarkTags = onAddBookmarkTags,

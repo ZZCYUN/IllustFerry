@@ -1136,23 +1136,49 @@ internal fun DownloadsPanel(
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
+                                // 类型/数量只在下载中或失败时展示状态文案；完成后只留一行类型，
+                                // 避免「5 张图片」与「已保存 5 张」这类重复描述。
+                                val typeText = when {
+                                    isNovel -> "小说文本"
+                                    item.isUgoira -> "动图 ${item.fileName.substringAfterLast('.', "WEBP").uppercase()}"
+                                    item.pageCount > 1 -> "${item.pageCount} 张图片"
+                                    else -> "单张图片"
+                                }
                                 Text(
-                                    text = when {
-                                        isNovel -> "小说文本"
-                                        item.isUgoira -> "动图 ${item.fileName.substringAfterLast('.', "WEBP").uppercase()}"
-                                        item.pageCount > 1 -> "${item.pageCount} 张图片"
-                                        else -> "单张图片"
-                                    },
+                                    text = typeText,
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
-                                Text(
-                                    text = item.detail.ifBlank { item.status.label },
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
+                                if (item.status != DownloadStatus.Finished) {
+                                    Text(
+                                        text = item.detail.ifBlank { item.status.label },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                                // 进度条语义：
+                                // - 动图：下载整包 → 合成 两段，各自 0→1，切换阶段时清零重走
+                                // - 多图：每张图一条，从 0 走到满；期间文案显示第几张
+                                // - 单图：一条，从 0 走到满
+                                if (item.status == DownloadStatus.Running) {
+                                    val progress = item.progress
+                                    if (progress != null) {
+                                        LinearProgressIndicator(
+                                            progress = { progress.coerceIn(0f, 1f) },
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(top = 2.dp),
+                                        )
+                                    } else {
+                                        LinearProgressIndicator(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(top = 2.dp),
+                                        )
+                                    }
+                                }
                             }
                             if (canOpen) {
                                 Icon(
