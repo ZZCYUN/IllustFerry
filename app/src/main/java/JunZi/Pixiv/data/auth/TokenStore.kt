@@ -4,6 +4,7 @@ import android.content.Context
 import JunZi.Pixiv.DownloadItem
 import JunZi.Pixiv.DownloadStatus
 import JunZi.Pixiv.PreviewSwipeMode
+import JunZi.Pixiv.RelatedWorksLayout
 import JunZi.Pixiv.PuxivCustomPalette
 import JunZi.Pixiv.PuxivThemeMode
 import JunZi.Pixiv.PuxivThemePalette
@@ -152,6 +153,15 @@ class TokenStore(context: Context) {
         preferences.edit { putString(KEY_PREVIEW_SWIPE_MODE, mode.name) }
     }
 
+    fun readRelatedWorksLayout(): RelatedWorksLayout {
+        val raw = preferences.getString(KEY_RELATED_WORKS_LAYOUT, null)
+        return RelatedWorksLayout.entries.firstOrNull { it.name == raw } ?: RelatedWorksLayout.Horizontal
+    }
+
+    fun saveRelatedWorksLayout(layout: RelatedWorksLayout) {
+        preferences.edit { putString(KEY_RELATED_WORKS_LAYOUT, layout.name) }
+    }
+
     fun readSaveUgoiraZip(): Boolean {
         return preferences.getBoolean(KEY_SAVE_UGOIRA_ZIP, false)
     }
@@ -259,6 +269,7 @@ class TokenStore(context: Context) {
         const val KEY_DYNAMIC_HOST_IPS = "dynamic_host_ips"
         const val KEY_IMAGE_PROXY_ORIGIN = "image_proxy_origin"
         const val KEY_PREVIEW_SWIPE_MODE = "preview_swipe_mode"
+        const val KEY_RELATED_WORKS_LAYOUT = "related_works_layout"
         const val KEY_SAVE_UGOIRA_ZIP = "save_ugoira_zip"
         const val KEY_USE_THUMBNAIL_PREVIEW = "use_thumbnail_preview"
         const val KEY_FILTERED_TAGS_INPUT = "filtered_tags_input"

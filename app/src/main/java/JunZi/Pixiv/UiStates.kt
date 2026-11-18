@@ -105,6 +105,16 @@ enum class PreviewSwipeMode {
     Horizontal,
 }
 
+/**
+ * 预览页「相关作品」的排布方式。
+ * - Horizontal：当前样式，作品详情下方一行横向卡片
+ * - Vertical：移到评论区下方，用首页同款瀑布流铺开，滚动到底自动加载更多
+ */
+enum class RelatedWorksLayout {
+    Horizontal,
+    Vertical,
+}
+
 enum class PuxivThemeMode {
     System,
     Light,
@@ -480,6 +490,7 @@ data class SettingsUiState(
     val filteredTagsInput: String = "",
     val ugoiraSaveFormat: UgoiraSaveFormat = UgoiraSaveFormat.WEBP,
     val previewSwipeMode: PreviewSwipeMode = PreviewSwipeMode.Horizontal,
+    val relatedWorksLayout: RelatedWorksLayout = RelatedWorksLayout.Horizontal,
     val useThumbnailPreview: Boolean = true,
     /** DoH 端点选择：JunZi.Pixiv.data.network.DohEndpoints.AUTO 或具体 URL。 */
     val dohEndpoint: String = JunZi.Pixiv.data.network.DohEndpoints.AUTO,

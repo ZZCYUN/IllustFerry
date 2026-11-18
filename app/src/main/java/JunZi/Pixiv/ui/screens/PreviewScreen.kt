@@ -291,6 +291,7 @@ internal fun PreviewScreen(
     onLoadBookmarkDetail: (Long, Boolean) -> Unit,
     onLoadBookmarkTags: () -> Unit,
     onLoadRelated: () -> Unit,
+    onLoadMoreRelated: () -> Unit,
     onOpenPreview: (Illust) -> Unit,
     onOpenFullScreen: (Int) -> Unit,
     onCloseFullScreen: () -> Unit,
@@ -423,10 +424,21 @@ internal fun PreviewScreen(
                     BoxWithConstraints(Modifier.fillMaxSize()) {
                         val dynamicHeight = (maxWidth / previewRatio.coerceIn(0.35f, 2.4f))
                             .coerceIn(maxHeight * 0.34f, maxHeight * 0.76f)
+                        val previewScrollState = rememberScrollState()
+                                        if (settings.relatedWorksLayout == RelatedWorksLayout.Vertical) {
+                            LaunchedEffect(previewScrollState.value, previewScrollState.maxValue, preview.related.nextUrl) {
+                                val max = previewScrollState.maxValue
+                                if (max > 0 && previewScrollState.value >= max - 400) {
+                                    if (preview.related.nextUrl != null && !preview.related.isLoading) {
+                                        onLoadMoreRelated()
+                                    }
+                                }
+                            }
+                        }
                         Column(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .verticalScroll(rememberScrollState()),
+                                .verticalScroll(previewScrollState),
                         ) {
                             Box(
                                 modifier = Modifier
@@ -477,6 +489,8 @@ internal fun PreviewScreen(
                                 bookmarkTags = bookmarkTags,
                                 selectedBookmark = preview.selectedBookmark,
                                 hideDownload = isLocalIllust(illust),
+                                // 竖向样式下相关作品改由评论区下方的瀑布流承载
+                                showRelated = settings.relatedWorksLayout == RelatedWorksLayout.Horizontal,
                                 onBookmarkPublic = onBookmarkPublic,
                                 onBookmarkPrivate = onBookmarkPrivate,
                                 onAddBookmarkTags = onAddBookmarkTags,
@@ -496,6 +510,14 @@ internal fun PreviewScreen(
                                 onSend = onSendComment,
                                 modifier = Modifier.fillMaxWidth(),
                             )
+                            if (settings.relatedWorksLayout == RelatedWorksLayout.Vertical) {
+                                RelatedWorksWaterfall(
+                                    related = preview.related,
+                                    onOpenPreview = onOpenPreview,
+                                    onLoadMore = onLoadMoreRelated,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
                         }
                     }
                 }
@@ -582,6 +604,81 @@ internal fun HorizontalImagePreview(
                 Text("${safeIndex + 1} / ${urls.size}")
                 IconButton(onClick = { onSelectImage(safeIndex + 1) }, enabled = safeIndex < urls.lastIndex) {
                     Icon(Icons.AutoMirrored.Filled.NavigateNext, contentDescription = "下一张")
+                }
+            }
+        }
+    }
+}
+
+/** 相关作品竖向瀑布流：两列按预估高度交替投放，触底由外层滚动监听触发加载。 */
+@Composable
+internal fun RelatedWorksWaterfall(
+    related: FeedState,
+    onOpenPreview: (Illust) -> Unit,
+    onLoadMore: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (related.items.isEmpty() && !related.isLoading) return
+
+    val columns = remember(related.items) {
+        val left = mutableListOf<Illust>()
+        val right = mutableListOf<Illust>()
+        var leftHeight = 0f
+        var rightHeight = 0f
+        related.items.forEach { item ->
+            val h = 1f / item.aspectRatio.coerceIn(0.35f, 2.4f)
+            if (leftHeight <= rightHeight) {
+                left += item
+                leftHeight += h
+            } else {
+                right += item
+                rightHeight += h
+            }
+        }
+        left to right
+    }
+
+    Column(
+        modifier = modifier.padding(horizontal = 12.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        SectionHeader(
+            title = "相关作品",
+            count = related.items.size,
+            isLoading = related.isLoading,
+            onRefresh = onLoadMore,
+            showRefresh = false,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(columns.first, columns.second).forEach { columnItems ->
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    columnItems.forEach { item ->
+                        IllustCard(
+                            illust = item,
+                            onClick = onOpenPreview,
+                        )
+                    }
+                }
+            }
+        }
+        if (related.nextUrl != null || related.isLoading) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 12.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (related.isLoading) {
+                    CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                } else {
+                    Text(
+                        text = "加载更多…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }

@@ -540,6 +540,8 @@ internal fun IllustMeta(
     selectedBookmark: SelectedBookmarkState,
     /** 本地已下载作品：隐藏下载入口（再下载一次没有意义）。 */
     hideDownload: Boolean = false,
+    /** 相关作品是否就地渲染横向列表；竖向模式由预览页在评论区下方单独铺瀑布流。 */
+    showRelated: Boolean = true,
     onBookmarkPublic: (List<String>) -> Unit,
     onBookmarkPrivate: (List<String>) -> Unit,
     onAddBookmarkTags: (List<String>) -> Unit,
@@ -718,7 +720,7 @@ internal fun IllustMeta(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-        if (related.items.isNotEmpty() || related.isLoading || related.nextUrl != null) {
+        if (showRelated && (related.items.isNotEmpty() || related.isLoading || related.nextUrl != null)) {
             SectionHeader(
                 title = "相关作品",
                 count = related.items.size,

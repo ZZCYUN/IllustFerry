@@ -12,6 +12,16 @@ internal fun PixivViewModel.updatePreviewSwipeMode(mode: PreviewSwipeMode) {
     store.savePreviewSwipeMode(mode)
     _settingsState.update { it.copy(previewSwipeMode = mode) }
 }
+internal fun PixivViewModel.updateRelatedWorksLayout(layout: RelatedWorksLayout) {
+    store.saveRelatedWorksLayout(layout)
+    _settingsState.update { it.copy(relatedWorksLayout = layout) }
+    showMessage(
+        when (layout) {
+            RelatedWorksLayout.Horizontal -> "更多作品：横向"
+            RelatedWorksLayout.Vertical -> "更多作品：竖向"
+        }
+    )
+}
 internal fun PixivViewModel.updateThemeMode(mode: PuxivThemeMode) {
     store.saveThemeMode(mode)
     _settingsState.update { it.copy(themeMode = mode) }

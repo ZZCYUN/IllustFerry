@@ -289,6 +289,7 @@ internal fun SettingsScreen(
     useThumbnailPreview: Boolean,
     filteredTagsInput: String,
     previewSwipeMode: PreviewSwipeMode,
+    relatedWorksLayout: RelatedWorksLayout,
     ugoiraSaveFormat: UgoiraSaveFormat,
     themeMode: PuxivThemeMode,
     useMaterialYou: Boolean,
@@ -300,6 +301,7 @@ internal fun SettingsScreen(
     onHostIpRoutingEnabledChange: (Boolean) -> Unit,
     onDohEndpointChange: (String) -> Unit,
     onPreviewSwipeModeChange: (PreviewSwipeMode) -> Unit,
+    onRelatedWorksLayoutChange: (RelatedWorksLayout) -> Unit,
     onThemeModeChange: (PuxivThemeMode) -> Unit,
     onMaterialYouEnabledChange: (Boolean) -> Unit,
     onThemePaletteChange: (PuxivThemePalette) -> Unit,
@@ -657,6 +659,43 @@ internal fun SettingsScreen(
                             selected = previewSwipeMode == PreviewSwipeMode.Horizontal,
                             onClick = { onPreviewSwipeModeChange(PreviewSwipeMode.Horizontal) },
                             label = { Text("左右滑动") },
+                        )
+                    }
+                }
+            }
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            ) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = "更多作品样式",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = "评论区下方作品的排布方式",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        FilterChip(
+                            selected = relatedWorksLayout == RelatedWorksLayout.Horizontal,
+                            onClick = { onRelatedWorksLayoutChange(RelatedWorksLayout.Horizontal) },
+                            label = { Text("横向") },
+                        )
+                        FilterChip(
+                            selected = relatedWorksLayout == RelatedWorksLayout.Vertical,
+                            onClick = { onRelatedWorksLayoutChange(RelatedWorksLayout.Vertical) },
+                            label = { Text("竖向") },
                         )
                     }
                 }

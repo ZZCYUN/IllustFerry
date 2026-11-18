@@ -106,6 +106,7 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
         val useRemoteImageProxy = store.readUseRemoteImageProxy()
         val storedImageProxyOrigin = store.readImageProxyOrigin()
         val previewSwipeMode = store.readPreviewSwipeMode()
+        val relatedWorksLayout = store.readRelatedWorksLayout()
         val saveUgoiraZip = store.readSaveUgoiraZip()
         val filteredTagsInput = store.readFilteredTagsInput()
         val storedUgoiraFormat = store.readUgoiraSaveFormat()
@@ -142,6 +143,7 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
                 dohEndpoint = dohEndpoint,
                 imageProxyInput = imageProxyOrigin,
                 previewSwipeMode = previewSwipeMode,
+                relatedWorksLayout = relatedWorksLayout,
                 saveUgoiraZip = saveUgoiraZip,
                 filteredTagsInput = filteredTagsInput,
                 ugoiraSaveFormat = ugoiraSaveFormat,
