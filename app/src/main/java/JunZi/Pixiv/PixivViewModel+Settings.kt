@@ -17,8 +17,8 @@ internal fun PixivViewModel.updateRelatedWorksLayout(layout: RelatedWorksLayout)
     _settingsState.update { it.copy(relatedWorksLayout = layout) }
     showMessage(
         when (layout) {
-            RelatedWorksLayout.Horizontal -> "更多作品：横向"
-            RelatedWorksLayout.Vertical -> "更多作品：竖向"
+            RelatedWorksLayout.Horizontal -> "相关作品：横向"
+            RelatedWorksLayout.Vertical -> "相关作品：竖向"
         }
     )
 }

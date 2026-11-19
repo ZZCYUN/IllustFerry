@@ -385,6 +385,14 @@ internal fun PreviewScreen(
                         onImageMeasured = { index, width, height ->
                             updateMeasuredRatio(index, width, height)
                         },
+                        onReachBottom = {
+                            if (settings.relatedWorksLayout == RelatedWorksLayout.Vertical &&
+                                preview.related.nextUrl != null &&
+                                !preview.related.isLoading
+                            ) {
+                                onLoadMoreRelated()
+                            }
+                        },
                         footer = {
                             IllustMeta(
                                 illust = illust,
@@ -392,6 +400,7 @@ internal fun PreviewScreen(
                                 bookmarkTags = bookmarkTags,
                                 selectedBookmark = preview.selectedBookmark,
                                 hideDownload = isLocalIllust(illust),
+                                showRelated = settings.relatedWorksLayout == RelatedWorksLayout.Horizontal,
                                 onBookmarkPublic = onBookmarkPublic,
                                 onBookmarkPrivate = onBookmarkPrivate,
                                 onAddBookmarkTags = onAddBookmarkTags,
@@ -411,6 +420,14 @@ internal fun PreviewScreen(
                                 onSend = onSendComment,
                                 modifier = Modifier.fillMaxWidth(),
                             )
+                            if (settings.relatedWorksLayout == RelatedWorksLayout.Vertical) {
+                                RelatedWorksWaterfall(
+                                    related = preview.related,
+                                    onOpenPreview = onOpenPreview,
+                                    onLoadMore = onLoadMoreRelated,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
                         },
                         modifier = Modifier.fillMaxSize(),
                     )
@@ -696,11 +713,18 @@ internal fun VerticalComicPreview(
     onSelectImage: (Int) -> Unit,
     onOpenFullScreen: (Int) -> Unit,
     onImageMeasured: (Int, Int, Int) -> Unit,
+    /** 滚动接近底部时回调，用于相关作品瀑布流自动加载下一页。 */
+    onReachBottom: () -> Unit = {},
     footer: @Composable () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val urls = illust.previewUrls(useThumbnail)
     val scrollState = rememberScrollState()
+    val currentOnReachBottom by rememberUpdatedState(onReachBottom)
+    LaunchedEffect(scrollState.value, scrollState.maxValue) {
+        val max = scrollState.maxValue
+        if (max > 0 && scrollState.value >= max - 400) currentOnReachBottom()
+    }
     var containerWidthPx by remember(illust.id) { mutableIntStateOf(1) }
     var lastSelectedFromScroll by remember(illust.id) {
         mutableIntStateOf(selectedIndex.coerceIn(0, (urls.size - 1).coerceAtLeast(0)))
