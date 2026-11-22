@@ -199,6 +199,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -703,23 +704,55 @@ internal fun HomeEntryButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // 选中标记：填充主色容器 + 实心图标块，未选中保持描边浅色样式。
+    // 选中标记：填充主色容器 + 实心图标块，颜色随选中态平滑过渡。
+    val containerColor by animateColorAsState(
+        targetValue = if (selected) {
+            MaterialTheme.colorScheme.primaryContainer
+        } else {
+            MaterialTheme.colorScheme.surface
+        },
+        label = "entryContainer",
+    )
+    val borderColor by animateColorAsState(
+        targetValue = if (selected) {
+            MaterialTheme.colorScheme.primary
+        } else {
+            MaterialTheme.colorScheme.outlineVariant
+        },
+        label = "entryBorder",
+    )
+    val iconBoxColor by animateColorAsState(
+        targetValue = if (selected) {
+            MaterialTheme.colorScheme.primary
+        } else {
+            MaterialTheme.colorScheme.primaryContainer
+        },
+        label = "entryIconBox",
+    )
+    val titleColor by animateColorAsState(
+        targetValue = if (selected) {
+            MaterialTheme.colorScheme.onPrimaryContainer
+        } else {
+            MaterialTheme.colorScheme.onSurface
+        },
+        label = "entryTitle",
+    )
+    val subtitleColor by animateColorAsState(
+        targetValue = if (selected) {
+            MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        },
+        label = "entrySubtitle",
+    )
     Surface(
         modifier = modifier
             .height(58.dp)
             .clip(RoundedCornerShape(8.dp))
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(8.dp),
-        color = if (selected) {
-            MaterialTheme.colorScheme.primaryContainer
-        } else {
-            MaterialTheme.colorScheme.surface
-        },
-        border = if (selected) {
-            BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
-        } else {
-            BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-        },
+        color = containerColor,
+        border = BorderStroke(1.dp, borderColor),
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 10.dp),
@@ -729,11 +762,7 @@ internal fun HomeEntryButton(
             Surface(
                 modifier = Modifier.size(32.dp),
                 shape = RoundedCornerShape(8.dp),
-                color = if (selected) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.primaryContainer
-                },
+                color = iconBoxColor,
                 contentColor = if (selected) {
                     MaterialTheme.colorScheme.onPrimary
                 } else {
@@ -749,22 +778,14 @@ internal fun HomeEntryButton(
                     text = title,
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold,
-                    color = if (selected) {
-                        MaterialTheme.colorScheme.onPrimaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.onSurface
-                    },
+                    color = titleColor,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
                     text = subtitle,
                     style = MaterialTheme.typography.labelSmall,
-                    color = if (selected) {
-                        MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
+                    color = subtitleColor,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -1143,6 +1164,7 @@ internal fun LazyStaggeredGridScope.homeFeedSection(
             count = feedState.items.size,
             isLoading = feedState.isLoading,
             onRefresh = { onLoadFeed(feed, true) },
+            modifier = Modifier,
         )
     }
     if (feedState.error != null) {
@@ -1152,7 +1174,8 @@ internal fun LazyStaggeredGridScope.homeFeedSection(
             span = StaggeredGridItemSpan.FullLine,
         ) {
             Surface(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth(),
                 shape = RoundedCornerShape(8.dp),
                 color = MaterialTheme.colorScheme.errorContainer,
                 contentColor = MaterialTheme.colorScheme.onErrorContainer,
@@ -1200,7 +1223,8 @@ internal fun LazyStaggeredGridScope.homeFeedSection(
         span = StaggeredGridItemSpan.FullLine,
     ) {
         Box(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth(),
             contentAlignment = Alignment.Center,
         ) {
             when {

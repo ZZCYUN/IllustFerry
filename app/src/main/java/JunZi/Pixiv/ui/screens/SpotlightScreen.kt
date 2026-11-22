@@ -193,6 +193,7 @@ internal fun LazyStaggeredGridScope.spotlightFeedSection(
             count = feed.items.size,
             isLoading = feed.isLoading,
             onRefresh = onLoad,
+            modifier = Modifier,
         )
     }
     if (feed.error != null) {
@@ -201,7 +202,10 @@ internal fun LazyStaggeredGridScope.spotlightFeedSection(
             contentType = "feed-error",
             span = StaggeredGridItemSpan.FullLine,
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(
+                modifier = Modifier,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp),
@@ -252,7 +256,8 @@ internal fun LazyStaggeredGridScope.spotlightFeedSection(
         span = StaggeredGridItemSpan.FullLine,
     ) {
         Box(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth(),
             contentAlignment = Alignment.Center,
         ) {
             when {

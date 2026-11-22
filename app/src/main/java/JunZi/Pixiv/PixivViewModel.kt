@@ -135,7 +135,7 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
         historyStore.retentionLimit = historyLimit
         val storedUgoiraFormat = store.readUgoiraSaveFormat()
         val ugoiraSaveFormat = UgoiraSaveFormat.entries.find { it.name == storedUgoiraFormat } ?: UgoiraSaveFormat.WEBP
-        val useThumbnailPreview = store.readUseThumbnailPreview()
+        val previewQuality = store.readPreviewQuality()
         val themeMode = store.readThemeMode()
         val useMaterialYou = store.readUseMaterialYou()
         val themePalette = store.readThemePalette()
@@ -176,7 +176,7 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
                 useMaterialYou = useMaterialYou,
                 themePalette = themePalette,
                 customPalette = customPalette,
-                useThumbnailPreview = useThumbnailPreview,
+                previewQuality = previewQuality,
             )
         }
         _homeState.update {

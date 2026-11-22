@@ -10,17 +10,8 @@ internal const val COLLECTION_BOOKS_PAGE_SIZE = 12
 
 // ==================== 特辑（Spotlight / pixivision） ====================
 
-/**
- * 打开底部「特辑」。再点一次底栏「特辑」= 关闭并回到底层主页面。
- */
-internal fun PixivViewModel.openSpotlight() {
-    if (_shellState.value.screen == AppScreen.Spotlight) {
-        goBack()
-        return
-    }
-    navigateTo(AppScreen.Spotlight)
-    loadSpotlight(refresh = false)
-}
+// 特辑现在是主壳 HorizontalPager 的第 2 页：底栏 / 滑动翻页由 MainShell 统一驱动，
+// 首次进入通过 ensureMainPageLoaded 触发 loadSpotlight。
 
 internal fun PixivViewModel.selectSpotlightCategory(category: SpotlightCategory) {
     if (_spotlightState.value.selectedCategory == category) return

@@ -572,6 +572,14 @@ data class MineUiState(
     val downloads: DownloadState = DownloadState(),
 )
 
+/** 预览页加载档位：从 original URL 派生不同分辨率的 pixiv 缩略图。 */
+enum class PreviewQuality(val label: String) {
+    Original("原图"),
+    Large("大图"),
+    Medium("中图"),
+    Small("缩略图"),
+}
+
 @Immutable
 data class SettingsUiState(
     val themeMode: PuxivThemeMode = PuxivThemeMode.System,
@@ -588,7 +596,7 @@ data class SettingsUiState(
     val ugoiraSaveFormat: UgoiraSaveFormat = UgoiraSaveFormat.WEBP,
     val previewSwipeMode: PreviewSwipeMode = PreviewSwipeMode.Horizontal,
     val relatedWorksLayout: RelatedWorksLayout = RelatedWorksLayout.Horizontal,
-    val useThumbnailPreview: Boolean = true,
+    val previewQuality: PreviewQuality = PreviewQuality.Medium,
     /** DoH 端点选择：JunZi.Pixiv.data.network.DohEndpoints.AUTO 或具体 URL。 */
     val dohEndpoint: String = JunZi.Pixiv.data.network.DohEndpoints.AUTO,
 )

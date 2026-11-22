@@ -1,6 +1,7 @@
 package JunZi.Pixiv.data.auth
 
 import android.content.Context
+import JunZi.Pixiv.PreviewQuality
 import JunZi.Pixiv.PreviewSwipeMode
 import JunZi.Pixiv.RelatedWorksLayout
 import JunZi.Pixiv.PuxivCustomPalette
@@ -146,12 +147,23 @@ class TokenStore(context: Context) {
         preferences.edit { putBoolean(KEY_SAVE_UGOIRA_ZIP, enabled) }
     }
 
-    fun readUseThumbnailPreview(): Boolean {
-        return preferences.getBoolean(KEY_USE_THUMBNAIL_PREVIEW, true)
+    fun readPreviewQuality(): PreviewQuality {
+        // 旧版布尔键迁移：false = 原图，true = 中图。
+        if (!preferences.contains(KEY_PREVIEW_QUALITY) && preferences.contains(KEY_USE_THUMBNAIL_PREVIEW)) {
+            val legacy = preferences.getBoolean(KEY_USE_THUMBNAIL_PREVIEW, true)
+            val migrated = if (legacy) PreviewQuality.Medium else PreviewQuality.Original
+            savePreviewQuality(migrated)
+            return migrated
+        }
+        val raw = preferences.getString(KEY_PREVIEW_QUALITY, null)
+        return raw?.let { runCatching { PreviewQuality.valueOf(it) }.getOrNull() } ?: PreviewQuality.Medium
     }
 
-    fun saveUseThumbnailPreview(enabled: Boolean) {
-        preferences.edit { putBoolean(KEY_USE_THUMBNAIL_PREVIEW, enabled) }
+    fun savePreviewQuality(quality: PreviewQuality) {
+        preferences.edit {
+            putString(KEY_PREVIEW_QUALITY, quality.name)
+            remove(KEY_USE_THUMBNAIL_PREVIEW)
+        }
     }
 
     fun readFilteredTagsInput(): String {
@@ -243,6 +255,7 @@ class TokenStore(context: Context) {
         const val KEY_RELATED_WORKS_LAYOUT = "related_works_layout"
         const val KEY_SAVE_UGOIRA_ZIP = "save_ugoira_zip"
         const val KEY_USE_THUMBNAIL_PREVIEW = "use_thumbnail_preview"
+        const val KEY_PREVIEW_QUALITY = "preview_quality"
         const val KEY_FILTERED_TAGS_INPUT = "filtered_tags_input"
         const val KEY_HISTORY_LIMIT = "history_limit"
         const val KEY_UGOIRA_SAVE_FORMAT = "ugoira_save_format"

@@ -68,6 +68,11 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -303,6 +308,19 @@ internal enum class DownloadKind {
 
 internal val LocalSeriesOpener = staticCompositionLocalOf<((Illust) -> Unit)?> { null }
 
+/** 全屏浮层页面（以覆盖层形式盖在主壳之上，进出带过渡动画）。 */
+private val TRANSIENT_SCREENS = setOf(
+    AppScreen.Login,
+    AppScreen.WebLogin,
+    AppScreen.WebPixiv,
+    AppScreen.SpotlightArticle,
+    AppScreen.CollectionDetail,
+    AppScreen.Preview,
+    AppScreen.Author,
+    AppScreen.NovelReader,
+    AppScreen.Series,
+)
+
 @Composable
 fun PuxivApp(viewModel: PixivViewModel) {
     val shell by viewModel.shellState.collectAsStateWithLifecycle()
@@ -330,20 +348,16 @@ fun PuxivApp(viewModel: PixivViewModel) {
             }?.screen ?: AppScreen.Home
         }
     }
-    // 特辑文章是全屏覆盖页：隐藏底层主壳，避免预览返回时的过渡动画里透出特辑列表造成跳变。
-    val showMainShell = mainShellScreen in setOf(AppScreen.Home, AppScreen.Search, AppScreen.Me, AppScreen.Settings, AppScreen.Spotlight) &&
-        shell.screen != AppScreen.SpotlightArticle
-    val showTransientScreen = shell.screen in setOf(
-        AppScreen.Login,
-        AppScreen.WebLogin,
-        AppScreen.WebPixiv,
-        AppScreen.SpotlightArticle,
-        AppScreen.CollectionDetail,
-        AppScreen.Preview,
-        AppScreen.Author,
-        AppScreen.NovelReader,
-        AppScreen.Series,
-    )
+    // 主壳常驻底层：浮层（预览/特辑文章/登录等）进出用 AnimatedVisibility 做平滑过渡，
+    // 底层内容在过渡期作为不透明背景，不会透出其它页面。
+    val showMainShell = mainShellScreen in setOf(AppScreen.Home, AppScreen.Search, AppScreen.Me, AppScreen.Settings, AppScreen.Spotlight)
+    val showTransientScreen = shell.screen in TRANSIENT_SCREENS
+    // 记住最后一个浮层页面：返回主壳时浮层退出动画期间仍渲染该页面，
+    // 否则 AnimatedContent 会瞬间清空内容导致返回看起来没有动画。
+    var lastTransientScreen by remember { mutableStateOf<AppScreen?>(null) }
+    LaunchedEffect(shell.screen) {
+        if (shell.screen in TRANSIENT_SCREENS) lastTransientScreen = shell.screen
+    }
 
     PuxivTheme(
         themeMode = settings.themeMode,
@@ -410,7 +424,7 @@ fun PuxivApp(viewModel: PixivViewModel) {
                         useRemoteImageProxy = settings.useRemoteImageProxy,
                         imageProxyInput = settings.imageProxyInput,
                         saveUgoiraZip = settings.saveUgoiraZip,
-                        useThumbnailPreview = settings.useThumbnailPreview,
+                        previewQuality = settings.previewQuality,
                         filteredTagsInput = settings.filteredTagsInput,
                         historyLimit = settings.historyLimit,
                         previewSwipeMode = settings.previewSwipeMode,
@@ -426,18 +440,30 @@ fun PuxivApp(viewModel: PixivViewModel) {
                         viewModel = viewModel,
                     )
                 }
-                if (showTransientScreen) {
-                    AnimatedContent(
-                        targetState = shell.screen,
-                        transitionSpec = {
-                            // 瞬时切换：交叉淡入淡出让底层页面在过渡期透出（预览返回特辑
-                            // 文章时先闪出特辑列表再弹详情），观感像页面被回收重拉。
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = showTransientScreen,
+                    enter = fadeIn(tween(160)),
+                    exit = fadeOut(tween(160)),
+                ) {
+                // 浮层之间切换用淡入淡出；进出主壳（initial/target 不都是浮层）时瞬时切换，
+                // 由外层 AnimatedVisibility 统一做平滑过渡，避免两套动画叠加造成卡顿。
+                AnimatedContent(
+                    targetState = if (shell.screen in TRANSIENT_SCREENS) {
+                        shell.screen
+                    } else {
+                        lastTransientScreen
+                    },
+                    transitionSpec = {
+                        if (initialState in TRANSIENT_SCREENS && targetState in TRANSIENT_SCREENS) {
+                            fadeIn(tween(150)) togetherWith fadeOut(tween(150))
+                        } else {
                             androidx.compose.animation.EnterTransition.None togetherWith
                                 androidx.compose.animation.ExitTransition.None
-                        },
-                        label = "transient-screen",
-                    ) { screen ->
-                        when (screen) {
+                        }
+                    },
+                    label = "transient-screen",
+                ) { screen ->
+                    when (screen) {
                             AppScreen.Login -> LoginScreen(
                                 accessTokenInput = auth.accessTokenInput,
                                 refreshTokenInput = auth.refreshTokenInput,
@@ -616,7 +642,7 @@ internal fun MainShell(
     useRemoteImageProxy: Boolean,
     imageProxyInput: String,
     saveUgoiraZip: Boolean,
-    useThumbnailPreview: Boolean,
+    previewQuality: PreviewQuality,
     filteredTagsInput: String,
     historyLimit: Int,
     previewSwipeMode: PreviewSwipeMode,
@@ -631,7 +657,9 @@ internal fun MainShell(
     collectionBooks: CollectionBooksState,
     viewModel: PixivViewModel,
 ) {
-    val mainScreens = remember { listOf(AppScreen.Home, AppScreen.Search, AppScreen.Me) }
+    val mainScreens = remember {
+        listOf(AppScreen.Home, AppScreen.Spotlight, AppScreen.Search, AppScreen.Me)
+    }
     val initialMainScreen = if (screen == AppScreen.Settings) AppScreen.Me else screen
     val pagerState = rememberPagerState(
         initialPage = mainScreens.indexOf(initialMainScreen).takeIf { it >= 0 } ?: 0,
@@ -695,11 +723,11 @@ internal fun MainShell(
     Scaffold(
         bottomBar = {
             MainBottomBar(
-                current = if (screen == AppScreen.Spotlight) AppScreen.Spotlight else selectedMainScreen,
+                current = selectedMainScreen,
                 onHome = { animateToMainPage(0) },
-                onSpotlight = viewModel::openSpotlight,
-                onSearch = { animateToMainPage(1) },
-                onMe = { animateToMainPage(2) },
+                onSpotlight = { animateToMainPage(1) },
+                onSearch = { animateToMainPage(2) },
+                onMe = { animateToMainPage(3) },
             )
         },
         contentWindowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
@@ -730,6 +758,16 @@ internal fun MainShell(
                         collectionBooks = collectionBooks,
                         onLoadMoreCollectionBooks = viewModel::loadMoreCollectionBooks,
                         onOpenCollectionBook = viewModel::openCollectionBook,
+                    )
+
+                    AppScreen.Spotlight -> SpotlightScreen(
+                        spotlight = spotlight,
+                        contentPadding = padding,
+                        onBack = viewModel::goBack,
+                        onSelectCategory = viewModel::selectSpotlightCategory,
+                        onLoad = { viewModel.loadSpotlight(refresh = true) },
+                        onLoadMore = viewModel::loadMoreSpotlight,
+                        onOpenArticle = viewModel::openSpotlightArticle,
                     )
 
                     AppScreen.Search -> SearchScreen(
@@ -798,6 +836,11 @@ internal fun MainShell(
                 }
             }
 
+            androidx.compose.animation.AnimatedVisibility(
+                visible = screen == AppScreen.Settings,
+                enter = fadeIn(tween(160)),
+                exit = fadeOut(tween(160)),
+            ) {
             if (screen == AppScreen.Settings) {
                 SettingsScreen(
                     diagnostics = diagnostics,
@@ -806,7 +849,7 @@ internal fun MainShell(
                     useRemoteImageProxy = useRemoteImageProxy,
                     imageProxyInput = imageProxyInput,
                     saveUgoiraZip = saveUgoiraZip,
-                    useThumbnailPreview = useThumbnailPreview,
+                    previewQuality = previewQuality,
                     filteredTagsInput = filteredTagsInput,
                     historyLimit = historyLimit,
                     previewSwipeMode = previewSwipeMode,
@@ -832,7 +875,7 @@ internal fun MainShell(
                     onSaveImageProxy = viewModel::saveImageProxyOrigin,
                     onResetImageProxy = viewModel::resetImageProxyOrigin,
                     onSaveUgoiraZipChange = viewModel::updateSaveUgoiraZip,
-                    onUseThumbnailPreviewChange = viewModel::updateUseThumbnailPreview,
+                    onPreviewQualityChange = viewModel::updatePreviewQuality,
                     onFilteredTagsInputChange = viewModel::updateFilteredTagsInput,
                     onSaveFilteredTags = viewModel::saveFilteredTags,
                     onHistoryLimitChange = viewModel::updateHistoryLimit,
@@ -840,17 +883,6 @@ internal fun MainShell(
                     onOpenWebPixiv = viewModel::openWebPixiv,
                 )
             }
-
-            if (screen == AppScreen.Spotlight) {
-                SpotlightScreen(
-                    spotlight = spotlight,
-                    contentPadding = padding,
-                    onBack = viewModel::goBack,
-                    onSelectCategory = viewModel::selectSpotlightCategory,
-                    onLoad = { viewModel.loadSpotlight(refresh = true) },
-                    onLoadMore = viewModel::loadMoreSpotlight,
-                    onOpenArticle = viewModel::openSpotlightArticle,
-                )
             }
         }
     }

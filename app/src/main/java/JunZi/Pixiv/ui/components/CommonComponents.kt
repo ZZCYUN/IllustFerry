@@ -447,11 +447,45 @@ internal fun PagingFooter(
  * 直接使用 [imageUrls]，否则会把下载项继承来的远程 [thumbnailUrls] 换进去，
  * 导致本地预览加载失败、全屏入口失效。
  */
-internal fun Illust.previewUrls(useThumbnail: Boolean = false): List<String> {
+/**
+ * 按预览档位返回各页图片地址。pixiv 的 4 档缩略图都由 original URL 规则派生：
+ *   - 原图   /img-original/img/{ymd}/{id}_p{n}.{ext}
+ *   - 大图   /c/1200x1200_90_webp/img-master/img/{ymd}/{id}_p{n}_master1200.jpg
+ *   - 中图   /c/540x540_10_webp/img-master/img/{ymd}/{id}_p{n}_master1200.jpg
+ *   - 缩略图 /c/250x250_80_a2/img-master/img/{ymd}/{id}_p{n}_square1200.jpg
+ * 非 pximg original 形态（本地文件 / 动图 / 小说封面等）原样返回。
+ */
+internal fun Illust.previewUrls(quality: PreviewQuality = PreviewQuality.Medium): List<String> {
     val local = imageUrls.ifEmpty { listOfNotNull(previewUrl) }
     if (local.isNotEmpty() && local.all { it.isLocalUri() }) return local
-    return if (useThumbnail && thumbnailUrls.isNotEmpty()) thumbnailUrls else local
+    if (quality == PreviewQuality.Original) return local
+    val derived = local.map { it.withPreviewQuality(quality) }
+    return if (derived.all { it != null }) {
+        derived.mapNotNull { it }
+    } else {
+        // 有派生失败的条目（非常规 URL）整组回退到 API 提供的缩略图。
+        if (thumbnailUrls.isNotEmpty() && thumbnailUrls.size == local.size) thumbnailUrls else local
+    }
 }
+
+/** 由 original URL 派生指定档位的缩略图；无法识别时返回 null。 */
+internal fun String.withPreviewQuality(quality: PreviewQuality): String? {
+    if (quality == PreviewQuality.Original) return this
+    val match = ORIGINAL_IMG_REGEX.find(this) ?: return null
+    val (host, path, filename) = match.destructured
+    val dot = filename.lastIndexOf('.')
+    if (dot <= 0) return null
+    val stem = filename.substring(0, dot)
+    val variant = when (quality) {
+        PreviewQuality.Large -> "/c/1200x1200_90_webp/img-master/img/$path/${stem}_master1200.jpg"
+        PreviewQuality.Medium -> "/c/540x540_10_webp/img-master/img/$path/${stem}_master1200.jpg"
+        PreviewQuality.Small -> "/c/250x250_80_a2/img-master/img/$path/${stem}_square1200.jpg"
+        PreviewQuality.Original -> return this
+    }
+    return "$host$variant"
+}
+
+private val ORIGINAL_IMG_REGEX = Regex("""(https://i\.pximg\.net)/img-original/img/(.+)/([^/]+)$""")
 
 private fun String.isLocalUri(): Boolean =
     startsWith("content://", ignoreCase = true) ||

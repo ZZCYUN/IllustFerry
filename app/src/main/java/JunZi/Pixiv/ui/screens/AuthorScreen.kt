@@ -353,7 +353,8 @@ internal fun AuthorScreen(
             if (feed.error != null) {
                 item(span = StaggeredGridItemSpan.FullLine) {
                     Surface(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth(),
                         shape = RoundedCornerShape(8.dp),
                         color = MaterialTheme.colorScheme.errorContainer,
                         contentColor = MaterialTheme.colorScheme.onErrorContainer,

@@ -25,13 +25,15 @@ internal fun PixivViewModel.openLoginScreen() {
     navigateTo(AppScreen.Login)
 }
 internal fun PixivViewModel.showMainPage(screen: AppScreen) {
-    if (screen !in setOf(AppScreen.Home, AppScreen.Search, AppScreen.Me)) return
+    if (screen !in setOf(AppScreen.Home, AppScreen.Spotlight, AppScreen.Search, AppScreen.Me)) return
     navigateTo(screen, addToBackStack = false)
 }
 internal fun PixivViewModel.ensureMainPageLoaded(screen: AppScreen) {
-    if (_authState.value.session == null && screen !in setOf(AppScreen.Home, AppScreen.Me)) return
+    // 特辑分类页匿名可读，未登录也允许加载。
+    if (_authState.value.session == null && screen !in setOf(AppScreen.Home, AppScreen.Spotlight, AppScreen.Me)) return
     when (screen) {
         AppScreen.Home -> loadHome(refresh = false)
+        AppScreen.Spotlight -> loadSpotlight(refresh = false)
         AppScreen.Search -> {
             loadTrendingTags(refresh = false)
             loadDiscover(refresh = false)

@@ -62,10 +62,10 @@ internal fun PixivViewModel.updateSaveUgoiraZip(enabled: Boolean) {
     _settingsState.update { it.copy(saveUgoiraZip = enabled) }
     showMessage(if (enabled) "下载动图时会额外保留 zip" else "下载动图时仅保留动图文件")
 }
-internal fun PixivViewModel.updateUseThumbnailPreview(enabled: Boolean) {
-    store.saveUseThumbnailPreview(enabled)
-    _settingsState.update { it.copy(useThumbnailPreview = enabled) }
-    showMessage(if (enabled) "预览页将加载缩略图以加快速度" else "预览页将加载原图")
+internal fun PixivViewModel.updatePreviewQuality(quality: PreviewQuality) {
+    store.savePreviewQuality(quality)
+    _settingsState.update { it.copy(previewQuality = quality) }
+    showMessage("预览画质已设置为 ${quality.label}")
 }
 internal fun PixivViewModel.updateUgoiraSaveFormat(format: UgoiraSaveFormat) {
     store.saveUgoiraSaveFormat(format.name)

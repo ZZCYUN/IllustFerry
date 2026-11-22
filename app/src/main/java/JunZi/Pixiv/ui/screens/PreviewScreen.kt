@@ -379,7 +379,7 @@ internal fun PreviewScreen(
                         selectedIndex = safeIndex,
                         measuredRatios = measuredRatios,
                         animateImages = !preview.isFullScreenPreview,
-                        useThumbnail = settings.useThumbnailPreview,
+                        quality = settings.previewQuality,
                         onSelectImage = onSelectImage,
                         onOpenFullScreen = onOpenFullScreen,
                         onImageMeasured = { index, width, height ->
@@ -473,7 +473,7 @@ internal fun PreviewScreen(
                                         illust = illust,
                                         imageIndex = preview.selectedImageIndex,
                                         animateImages = !preview.isFullScreenPreview,
-                                        useThumbnail = settings.useThumbnailPreview,
+                                        quality = settings.previewQuality,
                                         onSelectImage = onSelectImage,
                                         onOpenFullScreen = onOpenFullScreen,
                                         onImageMeasured = { index, width, height ->
@@ -561,13 +561,13 @@ internal fun HorizontalImagePreview(
     illust: Illust,
     imageIndex: Int,
     animateImages: Boolean,
-    useThumbnail: Boolean = false,
+    quality: PreviewQuality = PreviewQuality.Medium,
     onSelectImage: (Int) -> Unit,
     onOpenFullScreen: (Int) -> Unit,
     onImageMeasured: (Int, Int, Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val urls = illust.previewUrls(useThumbnail)
+    val urls = illust.previewUrls(quality)
     val safeIndex = imageIndex.coerceIn(0, (urls.size - 1).coerceAtLeast(0))
     val pagerState = rememberPagerState(initialPage = safeIndex) { urls.size.coerceAtLeast(1) }
 
@@ -709,7 +709,7 @@ internal fun VerticalComicPreview(
     selectedIndex: Int,
     measuredRatios: Map<Int, Float>,
     animateImages: Boolean,
-    useThumbnail: Boolean = false,
+    quality: PreviewQuality = PreviewQuality.Medium,
     onSelectImage: (Int) -> Unit,
     onOpenFullScreen: (Int) -> Unit,
     onImageMeasured: (Int, Int, Int) -> Unit,
@@ -718,7 +718,7 @@ internal fun VerticalComicPreview(
     footer: @Composable () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val urls = illust.previewUrls(useThumbnail)
+    val urls = illust.previewUrls(quality)
     val scrollState = rememberScrollState()
     val currentOnReachBottom by rememberUpdatedState(onReachBottom)
     LaunchedEffect(scrollState.value, scrollState.maxValue) {
@@ -934,7 +934,7 @@ internal fun FullScreenVerticalPreview(
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val urls = illust.previewUrls()
+    val urls = illust.previewUrls(PreviewQuality.Original)
     val scrollState = rememberScrollState()
     val firstPageTopPaddingPx = with(LocalDensity.current) { PuxivFullScreenTopBarHeight.toPx().roundToInt() }
     var scale by remember(illust.id) { mutableStateOf(1f) }

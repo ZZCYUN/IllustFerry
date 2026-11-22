@@ -286,7 +286,7 @@ internal fun SettingsScreen(
     useRemoteImageProxy: Boolean,
     imageProxyInput: String,
     saveUgoiraZip: Boolean,
-    useThumbnailPreview: Boolean,
+    previewQuality: PreviewQuality,
     filteredTagsInput: String,
     historyLimit: Int,
     previewSwipeMode: PreviewSwipeMode,
@@ -312,7 +312,7 @@ internal fun SettingsScreen(
     onSaveImageProxy: () -> Unit,
     onResetImageProxy: () -> Unit,
     onSaveUgoiraZipChange: (Boolean) -> Unit,
-    onUseThumbnailPreviewChange: (Boolean) -> Unit,
+    onPreviewQualityChange: (PreviewQuality) -> Unit,
     onFilteredTagsInputChange: (String) -> Unit,
     onSaveFilteredTags: () -> Unit,
     onHistoryLimitChange: (Int) -> Unit,
@@ -493,27 +493,32 @@ internal fun SettingsScreen(
                 color = MaterialTheme.colorScheme.surface,
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
             ) {
-                Row(
+                Column(
                     modifier = Modifier.padding(12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(
-                            text = "预览页使用缩略图",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        Text(
-                            text = "非全屏模式加载缩略图以加快速度，点击全屏后加载原图。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Switch(
-                        checked = useThumbnailPreview,
-                        onCheckedChange = onUseThumbnailPreviewChange,
+                    Text(
+                        text = "预览画质",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
                     )
+                    Text(
+                        text = "非全屏模式按所选档位加载，点击全屏后加载原图。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        PreviewQuality.entries.forEach { option ->
+                            FilterChip(
+                                selected = previewQuality == option,
+                                onClick = { onPreviewQualityChange(option) },
+                                label = { Text(option.label) },
+                            )
+                        }
+                    }
                 }
             }
             Surface(

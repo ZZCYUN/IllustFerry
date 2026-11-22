@@ -454,7 +454,7 @@ internal fun MeScreen(
                 }
 
                 MyTab.Bookmarks -> {
-                    item(span = StaggeredGridItemSpan.FullLine) {
+                    item(key = "me-bookmarks-panel", span = StaggeredGridItemSpan.FullLine) {
                         BookmarkCollectionPanel(
                             mine = mine,
                             selectedFeed = selectedBookmarkFeed,
