@@ -53,16 +53,21 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 internal const val APP_API_HOST = "app-api.pixiv.net"
 internal const val DNS_RETRY_DELAY_MS = 2_000L
 
+/** 请求失败后触发强制 DNS 刷新的最小间隔，避免持续失败时打爆 DoH 端点。 */
+internal const val DNS_RETRY_REFRESH_MIN_INTERVAL_MS = 5_000L
+
 class PixivViewModel(application: Application) : AndroidViewModel(application) {
     internal val store = TokenStore(application)
     internal val repository = PixivRepository(application)
     internal val historyStore = HistoryStore(application)
+    internal val downloadStore = JunZi.Pixiv.data.local.DownloadStore(application)
     internal val connectivityManager = application.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     internal val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) = updateVpnState()
@@ -74,6 +79,17 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
     internal val dnsWarmupMutex = Mutex()
     internal var dnsWarmupAttempted = false
 
+    /**
+     * 动态 Host IP 的「代际」计数：每次 DoH 刷新成功且确实更新了 IP 就 +1。
+     * 请求开始时记下代际，失败时对比——若期间有新 IP 落表（后台静默刷新完成），
+     * 说明刚才的请求可能一直挂在旧 IP 上，用新 IP 重试一次。
+     */
+    internal val dnsRefreshGeneration = AtomicLong(0L)
+
+    /** 上次「失败触发的强制刷新」时间，做 5s 冷却，防止连环失败时反复打 DoH。 */
+    @Volatile
+    internal var lastRetryDnsRefreshAtMillis = 0L
+
     internal val _shellState = MutableStateFlow(ShellUiState(screen = AppScreen.Home))
     internal val _authState = MutableStateFlow(AuthUiState())
     internal val _homeState = MutableStateFlow(HomeUiState())
@@ -83,6 +99,9 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
     internal val _novelState = MutableStateFlow(NovelUiState())
     internal val _mineState = MutableStateFlow(MineUiState())
     internal val _settingsState = MutableStateFlow(SettingsUiState())
+    internal val _spotlightState = MutableStateFlow(SpotlightState())
+    internal val _collectionDetailState = MutableStateFlow(CollectionDetailState())
+    internal val _collectionBooksState = MutableStateFlow(CollectionBooksState())
 
     val shellState: StateFlow<ShellUiState> = _shellState
     val authState: StateFlow<AuthUiState> = _authState
@@ -93,6 +112,9 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
     val novelState: StateFlow<NovelUiState> = _novelState
     val mineState: StateFlow<MineUiState> = _mineState
     val settingsState: StateFlow<SettingsUiState> = _settingsState
+    val spotlightState: StateFlow<SpotlightState> = _spotlightState
+    val collectionDetailState: StateFlow<CollectionDetailState> = _collectionDetailState
+    val collectionBooksState: StateFlow<CollectionBooksState> = _collectionBooksState
 
     /** 跨领域共享：全局消息（snackbar）。 */
     internal fun showMessage(message: String?) {
@@ -109,6 +131,8 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
         val relatedWorksLayout = store.readRelatedWorksLayout()
         val saveUgoiraZip = store.readSaveUgoiraZip()
         val filteredTagsInput = store.readFilteredTagsInput()
+        val historyLimit = store.readHistoryLimit()
+        historyStore.retentionLimit = historyLimit
         val storedUgoiraFormat = store.readUgoiraSaveFormat()
         val ugoiraSaveFormat = UgoiraSaveFormat.entries.find { it.name == storedUgoiraFormat } ?: UgoiraSaveFormat.WEBP
         val useThumbnailPreview = store.readUseThumbnailPreview()
@@ -146,6 +170,7 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
                 relatedWorksLayout = relatedWorksLayout,
                 saveUgoiraZip = saveUgoiraZip,
                 filteredTagsInput = filteredTagsInput,
+                historyLimit = historyLimit,
                 ugoiraSaveFormat = ugoiraSaveFormat,
                 themeMode = themeMode,
                 useMaterialYou = useMaterialYou,
@@ -161,12 +186,16 @@ class PixivViewModel(application: Application) : AndroidViewModel(application) {
                 ),
             )
         }
-        _mineState.update {
-            it.copy(downloads = DownloadState(store.readDownloads()))
+        // 下载记录不再有数量上限，改为后台异步加载，记录多时也不拖慢启动。
+        viewModelScope.launch(Dispatchers.IO) {
+            val items = downloadStore.all()
+            _mineState.update { it.copy(downloads = DownloadState(items)) }
         }
         viewModelScope.launch {
-            warmupDnsIfNeeded(forceRefresh = true)
+            // 启动即用持久化 IP 直接加载首页，不再阻塞等待 DoH 全量刷新。
             loadHome(refresh = false)
+            // 后台静默刷新动态 IP；期间发出的请求若失败，会按代际判断用刷新后的 IP 重连。
+            refreshDnsSilently()
         }
         registerNetworkCallback()
     }

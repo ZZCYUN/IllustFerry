@@ -101,6 +101,9 @@ internal fun PixivViewModel.goBack() {
     if (current == AppScreen.NovelReader && target != AppScreen.NovelReader) {
         _novelState.update { it.copy(novelReader = NovelReaderState()) }
     }
+    if (current == AppScreen.SpotlightArticle && target != AppScreen.SpotlightArticle) {
+        _spotlightState.update { it.copy(article = null, articleState = SpotlightArticleState()) }
+    }
     if (authorSnapshot != null) {
         _authorState.update { it.copy(author = authorSnapshot) }
     } else if (current == AppScreen.Author && target != AppScreen.Preview) {

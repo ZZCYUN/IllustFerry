@@ -68,6 +68,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
@@ -313,24 +314,31 @@ fun PuxivApp(viewModel: PixivViewModel) {
     val novel by viewModel.novelState.collectAsStateWithLifecycle()
     val mine by viewModel.mineState.collectAsStateWithLifecycle()
     val settings by viewModel.settingsState.collectAsStateWithLifecycle()
+    val spotlight by viewModel.spotlightState.collectAsStateWithLifecycle()
+    val collectionDetail by viewModel.collectionDetailState.collectAsStateWithLifecycle()
+    val collectionBooks by viewModel.collectionBooksState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val transientStateHolder = rememberSaveableStateHolder()
     val mainShellScreen = remember(shell.screen) {
-        if (shell.screen in setOf(AppScreen.Home, AppScreen.Search, AppScreen.Me, AppScreen.Settings)) {
+        if (shell.screen in setOf(AppScreen.Home, AppScreen.Search, AppScreen.Me, AppScreen.Settings, AppScreen.Spotlight)) {
             shell.screen
         } else if (shell.screen == AppScreen.Preview) {
             preview.previewReturnScreen
         } else {
             viewModel.backStack.lastOrNull {
-                it.screen in setOf(AppScreen.Home, AppScreen.Search, AppScreen.Me, AppScreen.Settings)
+                it.screen in setOf(AppScreen.Home, AppScreen.Search, AppScreen.Me, AppScreen.Settings, AppScreen.Spotlight)
             }?.screen ?: AppScreen.Home
         }
     }
-    val showMainShell = mainShellScreen in setOf(AppScreen.Home, AppScreen.Search, AppScreen.Me, AppScreen.Settings)
+    // 特辑文章是全屏覆盖页：隐藏底层主壳，避免预览返回时的过渡动画里透出特辑列表造成跳变。
+    val showMainShell = mainShellScreen in setOf(AppScreen.Home, AppScreen.Search, AppScreen.Me, AppScreen.Settings, AppScreen.Spotlight) &&
+        shell.screen != AppScreen.SpotlightArticle
     val showTransientScreen = shell.screen in setOf(
         AppScreen.Login,
         AppScreen.WebLogin,
         AppScreen.WebPixiv,
+        AppScreen.SpotlightArticle,
+        AppScreen.CollectionDetail,
         AppScreen.Preview,
         AppScreen.Author,
         AppScreen.NovelReader,
@@ -404,6 +412,7 @@ fun PuxivApp(viewModel: PixivViewModel) {
                         saveUgoiraZip = settings.saveUgoiraZip,
                         useThumbnailPreview = settings.useThumbnailPreview,
                         filteredTagsInput = settings.filteredTagsInput,
+                        historyLimit = settings.historyLimit,
                         previewSwipeMode = settings.previewSwipeMode,
                         relatedWorksLayout = settings.relatedWorksLayout,
                         ugoiraSaveFormat = settings.ugoiraSaveFormat,
@@ -411,12 +420,21 @@ fun PuxivApp(viewModel: PixivViewModel) {
                         useMaterialYou = settings.useMaterialYou,
                         themePalette = settings.themePalette,
                         customPalette = settings.customPalette,
+                        spotlight = spotlight,
+                        collectionDetail = collectionDetail,
+                        collectionBooks = collectionBooks,
                         viewModel = viewModel,
                     )
                 }
                 if (showTransientScreen) {
                     AnimatedContent(
                         targetState = shell.screen,
+                        transitionSpec = {
+                            // 瞬时切换：交叉淡入淡出让底层页面在过渡期透出（预览返回特辑
+                            // 文章时先闪出特辑列表再弹详情），观感像页面被回收重拉。
+                            androidx.compose.animation.EnterTransition.None togetherWith
+                                androidx.compose.animation.ExitTransition.None
+                        },
                         label = "transient-screen",
                     ) { screen ->
                         when (screen) {
@@ -443,6 +461,37 @@ fun PuxivApp(viewModel: PixivViewModel) {
                             AppScreen.WebPixiv -> WebPixivScreen(
                                 onBack = viewModel::goBack,
                             )
+
+                            AppScreen.SpotlightArticle -> transientStateHolder.SaveableStateProvider(
+                                key = "spotlight-article",
+                            ) {
+                                SpotlightArticleScreen(
+                                    headline = spotlight.article,
+                                    state = spotlight.articleState,
+                                    contentPadding = PaddingValues(0.dp),
+                                    onBack = viewModel::goBack,
+                                    onRetry = {
+                                        spotlight.article?.let { viewModel.loadSpotlightArticle(it.id) }
+                                    },
+                                    onOpenIllust = viewModel::openPreview,
+                                    onTagClick = viewModel::searchTag,
+                                )
+                            }
+
+                            AppScreen.CollectionDetail -> transientStateHolder.SaveableStateProvider(
+                                key = "collection-detail",
+                            ) {
+                                CollectionDetailScreen(
+                                    state = collectionDetail,
+                                    contentPadding = PaddingValues(0.dp),
+                                    onBack = viewModel::goBack,
+                                    onRetry = {
+                                        collectionDetail.collection?.let { viewModel.loadCollectionDetail(it.id) }
+                                    },
+                                    onOpenWork = viewModel::openPreview,
+                                    onOpenWorkById = viewModel::openPreviewById,
+                                )
+                            }
 
                             AppScreen.Preview -> PreviewScreen(
                                 preview = preview,
@@ -569,6 +618,7 @@ internal fun MainShell(
     saveUgoiraZip: Boolean,
     useThumbnailPreview: Boolean,
     filteredTagsInput: String,
+    historyLimit: Int,
     previewSwipeMode: PreviewSwipeMode,
     relatedWorksLayout: RelatedWorksLayout,
     ugoiraSaveFormat: UgoiraSaveFormat,
@@ -576,6 +626,9 @@ internal fun MainShell(
     useMaterialYou: Boolean,
     themePalette: PuxivThemePalette,
     customPalette: PuxivCustomPalette,
+    spotlight: SpotlightState,
+    collectionDetail: CollectionDetailState,
+    collectionBooks: CollectionBooksState,
     viewModel: PixivViewModel,
 ) {
     val mainScreens = remember { listOf(AppScreen.Home, AppScreen.Search, AppScreen.Me) }
@@ -642,8 +695,9 @@ internal fun MainShell(
     Scaffold(
         bottomBar = {
             MainBottomBar(
-                current = selectedMainScreen,
+                current = if (screen == AppScreen.Spotlight) AppScreen.Spotlight else selectedMainScreen,
                 onHome = { animateToMainPage(0) },
+                onSpotlight = viewModel::openSpotlight,
                 onSearch = { animateToMainPage(1) },
                 onMe = { animateToMainPage(2) },
             )
@@ -670,8 +724,12 @@ internal fun MainShell(
                         onLoadHome = { viewModel.loadHome(refresh = true) },
                         onLoadFeed = { feed, refresh -> viewModel.loadHomeFeed(feed, refresh) },
                         onRankingModeChange = viewModel::updateRankingMode,
-                        onSelectCategory = viewModel::selectHomeCategory,
                         onOpenPreview = viewModel::openPreview,
+                        onSelectHomeTab = viewModel::selectHomeTab,
+                        onSelectFeedPage = viewModel::selectHomeFeedPage,
+                        collectionBooks = collectionBooks,
+                        onLoadMoreCollectionBooks = viewModel::loadMoreCollectionBooks,
+                        onOpenCollectionBook = viewModel::openCollectionBook,
                     )
 
                     AppScreen.Search -> SearchScreen(
@@ -750,6 +808,7 @@ internal fun MainShell(
                     saveUgoiraZip = saveUgoiraZip,
                     useThumbnailPreview = useThumbnailPreview,
                     filteredTagsInput = filteredTagsInput,
+                    historyLimit = historyLimit,
                     previewSwipeMode = previewSwipeMode,
                     relatedWorksLayout = relatedWorksLayout,
                     ugoiraSaveFormat = ugoiraSaveFormat,
@@ -776,8 +835,21 @@ internal fun MainShell(
                     onUseThumbnailPreviewChange = viewModel::updateUseThumbnailPreview,
                     onFilteredTagsInputChange = viewModel::updateFilteredTagsInput,
                     onSaveFilteredTags = viewModel::saveFilteredTags,
+                    onHistoryLimitChange = viewModel::updateHistoryLimit,
                     onUgoiraSaveFormatChange = viewModel::updateUgoiraSaveFormat,
                     onOpenWebPixiv = viewModel::openWebPixiv,
+                )
+            }
+
+            if (screen == AppScreen.Spotlight) {
+                SpotlightScreen(
+                    spotlight = spotlight,
+                    contentPadding = padding,
+                    onBack = viewModel::goBack,
+                    onSelectCategory = viewModel::selectSpotlightCategory,
+                    onLoad = { viewModel.loadSpotlight(refresh = true) },
+                    onLoadMore = viewModel::loadMoreSpotlight,
+                    onOpenArticle = viewModel::openSpotlightArticle,
                 )
             }
         }
@@ -788,6 +860,7 @@ internal fun MainShell(
 internal fun MainBottomBar(
     current: AppScreen,
     onHome: () -> Unit,
+    onSpotlight: () -> Unit,
     onSearch: () -> Unit,
     onMe: () -> Unit,
 ) {
@@ -797,6 +870,12 @@ internal fun MainBottomBar(
             onClick = onHome,
             icon = { Icon(Icons.Default.Home, contentDescription = null) },
             label = { Text("首页") },
+        )
+        NavigationBarItem(
+            selected = current == AppScreen.Spotlight,
+            onClick = onSpotlight,
+            icon = { Icon(Icons.Default.Public, contentDescription = null) },
+            label = { Text("特辑") },
         )
         NavigationBarItem(
             selected = current == AppScreen.Search,
@@ -1469,6 +1548,11 @@ internal val OpenSourceLibraries = listOf(
         name = "Gson",
         license = "Apache License 2.0",
         licenseUrl = "https://github.com/google/gson/blob/main/LICENSE",
+    ),
+    OpenSourceLibrary(
+        name = "Jsoup",
+        license = "MIT License",
+        licenseUrl = "https://jsoup.org/license",
     ),
     OpenSourceLibrary(
         name = "Glide / Glide OkHttp / Glide GIF Encoder",

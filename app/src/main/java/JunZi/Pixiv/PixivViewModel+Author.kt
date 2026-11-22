@@ -49,6 +49,11 @@ internal fun PixivViewModel.openAuthor(
     loadAuthorProfile()
     loadAuthorWorks(refresh = true, tab = AuthorWorkTab.Illust)
 }
+/** 精选页 pixiv.net 链接跳转：只知道 userId，资料随后由 loadAuthorProfile 补全。 */
+internal fun PixivViewModel.openAuthorById(userId: Long) {
+    if (userId <= 0L) return
+    openAuthor(userId = userId, userName = "", userAccount = "", userAvatarUrl = null)
+}
 internal fun PixivViewModel.selectAuthorTab(tab: AuthorWorkTab) {
     val current = _authorState.value.author
     if (current.selectedTab == tab) return

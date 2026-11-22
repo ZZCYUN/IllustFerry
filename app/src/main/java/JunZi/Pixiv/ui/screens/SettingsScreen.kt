@@ -288,6 +288,7 @@ internal fun SettingsScreen(
     saveUgoiraZip: Boolean,
     useThumbnailPreview: Boolean,
     filteredTagsInput: String,
+    historyLimit: Int,
     previewSwipeMode: PreviewSwipeMode,
     relatedWorksLayout: RelatedWorksLayout,
     ugoiraSaveFormat: UgoiraSaveFormat,
@@ -314,6 +315,7 @@ internal fun SettingsScreen(
     onUseThumbnailPreviewChange: (Boolean) -> Unit,
     onFilteredTagsInputChange: (String) -> Unit,
     onSaveFilteredTags: () -> Unit,
+    onHistoryLimitChange: (Int) -> Unit,
     onUgoiraSaveFormatChange: (UgoiraSaveFormat) -> Unit,
     onOpenWebPixiv: () -> Unit,
 ) {
@@ -618,6 +620,45 @@ internal fun SettingsScreen(
                         Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
                         Text("保存过滤标签")
+                    }
+                }
+            }
+            Text(
+                text = "数据存储",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            ) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = "历史记录上限",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = "超过上限时自动删除最旧的浏览历史。下载记录不设上限，元数据永不丢弃。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        HistoryLimitOption.entries.forEach { option ->
+                            FilterChip(
+                                selected = historyLimit == option.value,
+                                onClick = { onHistoryLimitChange(option.value) },
+                                label = { Text(option.label) },
+                            )
+                        }
                     }
                 }
             }

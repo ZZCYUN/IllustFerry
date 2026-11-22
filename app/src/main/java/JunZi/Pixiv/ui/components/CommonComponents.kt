@@ -365,6 +365,14 @@ internal fun IllustCard(
                         .align(Alignment.TopStart)
                         .padding(6.dp),
                 )
+            } else if (illust.aiType == 2) {
+                // AI 生成作品：左上角加 AI 标识，与右上角的类型角标同款样式。
+                OverlayChip(
+                    "AI",
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(6.dp),
+                )
             }
             Row(
                 modifier = Modifier
@@ -1153,6 +1161,13 @@ internal fun String.glideModel(): Any {
         startsWith("content://", ignoreCase = true) ||
             startsWith("file://", ignoreCase = true) ||
             startsWith("android.resource://", ignoreCase = true) -> toUri()
+        // embed.pixiv.net 的珍藏册封面：无登录态请求被 pixiv 源站 400（官网匿名浏览同样如此）。
+        // 把 WebView 里的 pixiv cookie 带上，用户在网页登录过就能出真封面。
+        contains("embed.pixiv.net") -> GlideUrl(this, com.bumptech.glide.load.model.LazyHeaders.Builder()
+            .addHeader("Cookie", android.webkit.CookieManager.getInstance().getCookie("https://www.pixiv.net").orEmpty())
+            .addHeader("Referer", "https://www.pixiv.net/collection")
+            .addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+            .build())
         else -> GlideUrl(this)
     }
 }

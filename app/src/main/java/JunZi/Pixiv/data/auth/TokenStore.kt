@@ -1,8 +1,6 @@
 package JunZi.Pixiv.data.auth
 
 import android.content.Context
-import JunZi.Pixiv.DownloadItem
-import JunZi.Pixiv.DownloadStatus
 import JunZi.Pixiv.PreviewSwipeMode
 import JunZi.Pixiv.RelatedWorksLayout
 import JunZi.Pixiv.PuxivCustomPalette
@@ -13,14 +11,6 @@ import JunZi.Pixiv.data.network.PixivNetworkConfig
 import androidx.core.content.edit
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
-
-private fun nonBlankStringOrNull(value: String?): String? {
-    return value?.takeIf { it.isNotBlank() }
-}
-
-private fun DownloadStatus?.orFailed(): DownloadStatus {
-    return this ?: DownloadStatus.Failed
-}
 
 class TokenStore(context: Context) {
     private val preferences = context.getSharedPreferences("puxiv_auth", Context.MODE_PRIVATE)
@@ -72,20 +62,6 @@ class TokenStore(context: Context) {
 
     fun readCodeVerifier(): String? {
         return preferences.getString(KEY_CODE_VERIFIER, null)?.takeIf { it.isNotBlank() }
-    }
-
-    fun readDownloads(): List<DownloadItem> {
-        val json = preferences.getString(KEY_DOWNLOADS, null)?.takeIf { it.isNotBlank() } ?: return emptyList()
-        return runCatching {
-            val parsed: List<DownloadItem?>? = gson.fromJson(json, DOWNLOAD_LIST_TYPE)
-            parsed.orEmpty().mapNotNull { it?.normalized() }
-        }.getOrDefault(emptyList())
-    }
-
-    fun saveDownloads(items: List<DownloadItem>) {
-        preferences.edit {
-            putString(KEY_DOWNLOADS, gson.toJson(items.take(MAX_STORED_DOWNLOADS)))
-        }
     }
 
     fun readUseRemoteImageProxy(): Boolean {
@@ -186,6 +162,19 @@ class TokenStore(context: Context) {
         preferences.edit { putString(KEY_FILTERED_TAGS_INPUT, value) }
     }
 
+    /**
+     * 历史记录保留上限（条）：0 = 不限；>0 = 只保留最近 N 条。默认 1000。
+     * 只影响历史（缓存性质）；下载记录始终无上限。
+     */
+    fun readHistoryLimit(): Int {
+        val value = preferences.getInt(KEY_HISTORY_LIMIT, JunZi.Pixiv.data.local.DEFAULT_HISTORY_RETENTION_LIMIT)
+        return if (value < 0) JunZi.Pixiv.data.local.DEFAULT_HISTORY_RETENTION_LIMIT else value
+    }
+
+    fun saveHistoryLimit(value: Int) {
+        preferences.edit { putInt(KEY_HISTORY_LIMIT, value.coerceAtLeast(0)) }
+    }
+
     fun readUgoiraSaveFormat(): String {
         return preferences.getString(KEY_UGOIRA_SAVE_FORMAT, "WEBP") ?: "WEBP"
     }
@@ -237,23 +226,6 @@ class TokenStore(context: Context) {
         return trim().removePrefix("Bearer ").trim()
     }
 
-    private fun DownloadItem.normalized(): DownloadItem {
-        val cleanSavedUris = savedUris.orEmpty()
-            .mapNotNull(::nonBlankStringOrNull)
-            .ifEmpty { listOfNotNull(savedUri?.takeIf { it.isNotBlank() }) }
-        return copy(
-            title = title.orEmpty(),
-            fileName = fileName.orEmpty(),
-            status = status.orFailed(),
-            pageCount = pageCount.coerceAtLeast(cleanSavedUris.size.coerceAtLeast(1)),
-            relativePath = relativePath.orEmpty(),
-            detail = detail.orEmpty(),
-            savedUri = savedUri?.takeIf { it.isNotBlank() } ?: cleanSavedUris.firstOrNull(),
-            savedUris = cleanSavedUris,
-            zipSavedUri = zipSavedUri?.takeIf { it.isNotBlank() },
-        )
-    }
-
     private companion object {
         const val KEY_ACCESS_TOKEN = "access_token"
         const val KEY_REFRESH_TOKEN = "refresh_token"
@@ -263,7 +235,6 @@ class TokenStore(context: Context) {
         const val KEY_USER_NAME = "user_name"
         const val KEY_USER_ACCOUNT = "user_account"
         const val KEY_USER_AVATAR = "user_avatar"
-        const val KEY_DOWNLOADS = "downloads"
         const val KEY_USE_REMOTE_IMAGE_PROXY = "use_remote_image_proxy"
         const val KEY_USE_HOST_IP_ROUTING = "use_host_ip_routing"
         const val KEY_DYNAMIC_HOST_IPS = "dynamic_host_ips"
@@ -273,13 +244,12 @@ class TokenStore(context: Context) {
         const val KEY_SAVE_UGOIRA_ZIP = "save_ugoira_zip"
         const val KEY_USE_THUMBNAIL_PREVIEW = "use_thumbnail_preview"
         const val KEY_FILTERED_TAGS_INPUT = "filtered_tags_input"
+        const val KEY_HISTORY_LIMIT = "history_limit"
         const val KEY_UGOIRA_SAVE_FORMAT = "ugoira_save_format"
         const val KEY_THEME_MODE = "theme_mode"
         const val KEY_USE_MATERIAL_YOU = "use_material_you"
         const val KEY_THEME_PALETTE = "theme_palette"
         const val KEY_CUSTOM_THEME_PALETTE = "custom_theme_palette"
-        const val MAX_STORED_DOWNLOADS = 200
-        val DOWNLOAD_LIST_TYPE = object : TypeToken<List<DownloadItem?>>() {}.type
         val HOST_IPS_TYPE = object : TypeToken<Map<String, List<String>?>>() {}.type
     }
 }

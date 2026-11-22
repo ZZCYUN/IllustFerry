@@ -63,6 +63,22 @@ object OkHttpProvider {
             .build()
     }
 
+    /**
+     * pixiv web ajax（珍藏册 collections 搜索/详情）专用：与 apiClient 同样走内置代理
+     * + MITM/ECH 隧道，但不加 App 请求头（User-Agent / X-Client-时间戳等会覆盖浏览器伪装），
+     * 由请求方自带浏览器 UA + Referer。
+     */
+    private val webAjaxClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(20, TimeUnit.SECONDS)
+            .readTimeout(40, TimeUnit.SECONDS)
+            .writeTimeout(40, TimeUnit.SECONDS)
+            .proxy(apiProxy())
+            .sslSocketFactory(proxySslFactory, PixivUnsafeTls.trustManager)
+            .hostnameVerifier(PixivUnsafeTls.hostnameVerifier)
+            .build()
+    }
+
     @JvmStatic
     fun apiClient(): OkHttpClient = apiClient
 
@@ -70,6 +86,8 @@ object OkHttpProvider {
     fun imageClient(): OkHttpClient = imageClient
 
     fun directClient(): OkHttpClient = directClient
+
+    fun webAjaxClient(): OkHttpClient = webAjaxClient
 
     fun currentApiClient(): OkHttpClient = apiClient
 

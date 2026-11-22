@@ -25,8 +25,28 @@ internal fun PixivViewModel.updateRankingMode(mode: RankingMode) {
 }
 internal fun PixivViewModel.updateRankingDate(value: String) = _homeState.update { it.copy(rankingDate = value.trim()) }
 internal fun PixivViewModel.selectHomeCategory(category: HomeCategory) {
+    selectHomeTab(
+        when (category) {
+            HomeCategory.Illust -> HomeTopTab.Illust
+            HomeCategory.Manga -> HomeTopTab.Manga
+            HomeCategory.Novel -> HomeTopTab.Novel
+        },
+    )
+}
+/**
+ * 首页顶部 Tab 切换：插画 / 漫画 / 小说 / 珍藏册。
+ * 珍藏册 tab 走 web ajax（top 聚合 + 全部分页），其余 tab 维持原有 feed 逻辑。
+ */
+internal fun PixivViewModel.selectHomeTab(tab: HomeTopTab) {
     val state = _homeState.value
-    if (state.home.category == category) return
+    if (state.home.topTab == tab) return
+    _homeState.update { it.copy(home = it.home.copy(topTab = tab)) }
+    val category = tab.category
+    if (category == null) {
+        loadCollectionTop(refresh = false)
+        loadMoreCollectionBooks()
+        return
+    }
     val target = state.home.categoryState(category)
     _homeState.update {
         it.copy(
@@ -66,8 +86,25 @@ internal fun PixivViewModel.loadCategoryFeeds(category: HomeCategory, refresh: B
     _homeState.update {
         it.copy(home = it.home.withCategoryState(category) { state -> state.copy(hasLoaded = true) })
     }
-    listOf(HomeFeed.Recommended, HomeFeed.Ranking, HomeFeed.Latest).forEach {
-        loadHomeFeed(category, it, refresh = refresh)
+    // 子页面模式：只加载当前选中的推荐/排行/最新，其余在入口切换时按需加载。
+    loadHomeFeed(category, _homeState.value.home.feedPage, refresh = refresh)
+}
+
+/** 首页入口行切换子页面（推荐/排行/最新）：原地替换下方 feed 区域。 */
+internal fun PixivViewModel.selectHomeFeedPage(feed: HomeFeed) {
+    val state = _homeState.value
+    if (state.home.feedPage == feed) return
+    _homeState.update { it.copy(home = it.home.copy(feedPage = feed)) }
+    if (_authState.value.session == null) return
+    val category = state.home.category
+    val target = state.home.categoryState(category)
+    val feedState = when (feed) {
+        HomeFeed.Recommended -> target.recommended
+        HomeFeed.Ranking -> target.ranking
+        else -> target.latest
+    }
+    if (feedState.items.isEmpty()) {
+        loadHomeFeed(category, feed, refresh = true)
     }
 }
 internal fun PixivViewModel.loadHomeFeed(feed: HomeFeed, refresh: Boolean = false) {
@@ -92,7 +129,7 @@ internal fun PixivViewModel.loadHomeFeed(category: HomeCategory, feed: HomeFeed,
         runCatching {
             if (anonymousWalkthrough) {
                 warmupDnsIfNeeded()
-                repository.walkthrough()
+                withNetworkRetry { repository.walkthrough() }
             } else {
                 withAccessToken { accessToken ->
                     if (refresh) firstHomePage(category, feed, accessToken, requestRankingMode, requestRankingDate) else {

@@ -39,6 +39,7 @@ import JunZi.Pixiv.ui.theme.PuxivTheme
 import JunZi.Pixiv.ui.theme.puxivColorScheme
 import JunZi.Pixiv.data.model.HomeCategory
 import JunZi.Pixiv.data.model.NovelDetail
+import JunZi.Pixiv.data.model.PixivCollection
 import JunZi.Pixiv.data.model.RankingMode
 import JunZi.Pixiv.data.model.SearchSort
 import JunZi.Pixiv.data.model.SearchTarget
@@ -160,6 +161,7 @@ import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Download
@@ -286,8 +288,12 @@ internal fun HomeScreen(
     onLoadHome: () -> Unit,
     onLoadFeed: (HomeFeed, Boolean) -> Unit,
     onRankingModeChange: (RankingMode) -> Unit,
-    onSelectCategory: (HomeCategory) -> Unit,
+    onSelectHomeTab: (HomeTopTab) -> Unit,
+    onSelectFeedPage: (HomeFeed) -> Unit,
     onOpenPreview: (Illust) -> Unit,
+    collectionBooks: CollectionBooksState,
+    onLoadMoreCollectionBooks: () -> Unit,
+    onOpenCollectionBook: (PixivCollection) -> Unit,
 ) {
     val isAnonymous = session == null
     val category = home.category
@@ -297,23 +303,22 @@ internal fun HomeScreen(
         HomeCategory.Novel -> home.novel
     }
     val rankingMode = categoryState.rankingMode
-    val primaryFeed = if (isAnonymous) home.walkthrough else categoryState.recommended
-    val visibleItems = if (isAnonymous) {
-        home.walkthrough.items
+    val selectedFeed = home.feedPage
+    val primaryFeed = if (isAnonymous) {
+        home.walkthrough
     } else {
-        categoryState.recommended.items + categoryState.ranking.items + categoryState.latest.items
+        when (selectedFeed) {
+            HomeFeed.Recommended -> categoryState.recommended
+            HomeFeed.Ranking -> categoryState.ranking
+            else -> categoryState.latest
+        }
     }
     val gridState = rememberLazyStaggeredGridState()
     val coroutineScope = rememberCoroutineScope()
     val decorativeFeedSemantics = rememberDecorativeFeedSemantics()
-    val totalWorks by remember(visibleItems) {
+    val homeTrendTags by remember(primaryFeed) {
         derivedStateOf {
-            visibleItems.size
-        }
-    }
-    val homeTrendTags by remember(visibleItems) {
-        derivedStateOf {
-            visibleItems
+            primaryFeed.items
                 .asSequence()
                 .flatMap { it.tags.asSequence() }
                 .map { it.trim() }
@@ -323,18 +328,17 @@ internal fun HomeScreen(
                 .toList()
         }
     }
-    val tabOptions = listOf(
-        HomeCategory.Illust to "插画",
-        HomeCategory.Manga to "漫画",
-        HomeCategory.Novel to "小说",
-    )
-    val selectedTabIndex = tabOptions.indexOfFirst { it.first == category }.takeIf { it >= 0 } ?: 0
-    val baseHeaderCount = (if (!isAnonymous) 2 else 0) +
-        (if (!isAnonymous) 1 else 0) +
-        (if (!isAnonymous && homeTrendTags.isNotEmpty()) 1 else 0)
-    val recommendedHeaderIndex = baseHeaderCount
-    val rankingModesIndex = recommendedHeaderIndex + homeFeedSectionItemCount(primaryFeed)
-    val rankingHeaderIndex = rankingModesIndex + 1
+    val topTab = home.topTab
+    val isCollectionTab = topTab == HomeTopTab.CollectionBooks
+    // 顶部副标题跟随当前分类与子页面，替代原来的「N 件作品」计数。
+    val headerSubtitle = when (topTab) {
+        HomeTopTab.CollectionBooks -> "pixiv 官方珍藏册"
+        else -> if (isAnonymous) {
+            "发现插画与特辑"
+        } else {
+            "${topTab.label} · ${selectedFeed.pageLabel}"
+        }
+    }
 
     Scaffold(
         modifier = Modifier.padding(contentPadding),
@@ -348,7 +352,7 @@ internal fun HomeScreen(
                             Text("IllustFerry", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                         }
                         Text(
-                            text = "$totalWorks 件作品",
+                            text = headerSubtitle,
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
@@ -370,19 +374,31 @@ internal fun HomeScreen(
                 .padding(padding)
                 .feedSemanticsBoundary(decorativeFeedSemantics),
         ) {
-            if (!isAnonymous) {
-                PrimaryTabRow(
-                    selectedTabIndex = selectedTabIndex,
-                    containerColor = MaterialTheme.colorScheme.surface,
-                ) {
-                    tabOptions.forEachIndexed { index, (cat, label) ->
-                        Tab(
-                            selected = selectedTabIndex == index,
-                            onClick = { onSelectCategory(cat) },
-                            text = { Text(label) },
-                        )
-                    }
+            PrimaryTabRow(
+                selectedTabIndex = topTab.ordinal,
+                containerColor = MaterialTheme.colorScheme.surface,
+            ) {
+                HomeTopTab.entries.forEach { option ->
+                    Tab(
+                        selected = topTab == option,
+                        onClick = { onSelectHomeTab(option) },
+                        text = { Text(option.label) },
+                    )
                 }
+            }
+            val shouldLoadMoreBooks by derivedStateOf {
+                if (!isCollectionTab) {
+                    false
+                } else {
+                    val info = gridState.layoutInfo
+                    val last = info.visibleItemsInfo.lastOrNull()?.index ?: -1
+                    collectionBooks.hasMore &&
+                        !collectionBooks.isLoadingMore && info.totalItemsCount > 0 &&
+                        last >= info.totalItemsCount - 5
+                }
+            }
+            LaunchedEffect(shouldLoadMoreBooks) {
+                if (shouldLoadMoreBooks) onLoadMoreCollectionBooks()
             }
             LazyVerticalStaggeredGrid(
                 columns = StaggeredGridCells.Adaptive(150.dp),
@@ -392,7 +408,13 @@ internal fun HomeScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalItemSpacing = 8.dp,
             ) {
-                if (!isAnonymous) {
+                if (isCollectionTab) {
+                    collectionBooksSection(
+                        state = collectionBooks,
+                        onOpenBook = onOpenCollectionBook,
+                        onLoadMore = onLoadMoreCollectionBooks,
+                    )
+                } else if (!isAnonymous) {
                     item(
                         key = "home-search",
                         contentType = "home-search",
@@ -411,23 +433,13 @@ internal fun HomeScreen(
                         span = StaggeredGridItemSpan.FullLine,
                     ) {
                         HomeEntryRow(
+                            selectedFeed = selectedFeed,
                             rankingLabel = rankingMode.label,
-                            onRecommended = {
-                                coroutineScope.launch {
-                                    gridState.animateScrollToItem(recommendedHeaderIndex)
-                                }
-                                onLoadFeed(HomeFeed.Recommended, true)
-                            },
-                            onRanking = {
-                                coroutineScope.launch {
-                                    gridState.animateScrollToItem(rankingHeaderIndex)
-                                }
-                                onLoadFeed(HomeFeed.Ranking, true)
-                            },
+                            onSelectFeedPage = onSelectFeedPage,
                         )
                     }
                 }
-                if (!isAnonymous && homeTrendTags.isNotEmpty()) {
+                if (!isCollectionTab && !isAnonymous && homeTrendTags.isNotEmpty()) {
                     item(
                         key = "home-trend-tags",
                         contentType = "home-trend-tags",
@@ -442,51 +454,69 @@ internal fun HomeScreen(
                         )
                     }
                 }
-                val recommendedTitle = when {
-                    isAnonymous -> "浏览"
-                    category == HomeCategory.Novel -> "小说推荐"
-                    category == HomeCategory.Manga -> "漫画推荐"
-                    else -> "推荐"
-                }
-                homeFeedSection(
-                    title = recommendedTitle,
-                    feed = if (isAnonymous) HomeFeed.Walkthrough else HomeFeed.Recommended,
-                    feedState = primaryFeed,
-                    keyPrefix = category.name,
-                    clearItemSemantics = decorativeFeedSemantics,
-                    onLoadFeed = onLoadFeed,
-                    onOpenPreview = onOpenPreview,
-                )
-                if (!isAnonymous) {
-                    item(
-                        key = "home-ranking-modes-${category.name}",
-                        contentType = "home-ranking-modes",
-                        span = StaggeredGridItemSpan.FullLine,
-                    ) {
-                        RankingModeChips(
-                            selected = rankingMode,
-                            category = category,
-                            onSelect = onRankingModeChange,
+                if (isCollectionTab) return@LazyVerticalStaggeredGrid
+                if (isAnonymous) {
+                    homeFeedSection(
+                        title = "浏览",
+                        feed = HomeFeed.Walkthrough,
+                        feedState = primaryFeed,
+                        keyPrefix = "Walkthrough",
+                        clearItemSemantics = decorativeFeedSemantics,
+                        onLoadFeed = onLoadFeed,
+                        onOpenPreview = onOpenPreview,
+                    )
+                } else {
+                    // 子页面模式：入口行选中的那个 feed 原地替换展示，不滚动定位。
+                    when (selectedFeed) {
+                        HomeFeed.Recommended -> homeFeedSection(
+                            title = when (category) {
+                                HomeCategory.Novel -> "小说推荐"
+                                HomeCategory.Manga -> "漫画推荐"
+                                else -> "推荐"
+                            },
+                            feed = HomeFeed.Recommended,
+                            feedState = categoryState.recommended,
+                            keyPrefix = category.name,
+                            clearItemSemantics = decorativeFeedSemantics,
+                            onLoadFeed = onLoadFeed,
+                            onOpenPreview = onOpenPreview,
                         )
+
+                        HomeFeed.Ranking -> {
+                            item(
+                                key = "home-ranking-modes-${category.name}",
+                                contentType = "home-ranking-modes",
+                                span = StaggeredGridItemSpan.FullLine,
+                            ) {
+                                RankingModeChips(
+                                    selected = rankingMode,
+                                    category = category,
+                                    onSelect = onRankingModeChange,
+                                )
+                            }
+                            homeFeedSection(
+                                title = "排行 · ${rankingMode.label}",
+                                feed = HomeFeed.Ranking,
+                                feedState = categoryState.ranking,
+                                keyPrefix = category.name,
+                                clearItemSemantics = decorativeFeedSemantics,
+                                onLoadFeed = onLoadFeed,
+                                onOpenPreview = onOpenPreview,
+                            )
+                        }
+
+                        HomeFeed.Latest -> homeFeedSection(
+                            title = "最新",
+                            feed = HomeFeed.Latest,
+                            feedState = categoryState.latest,
+                            keyPrefix = category.name,
+                            clearItemSemantics = decorativeFeedSemantics,
+                            onLoadFeed = onLoadFeed,
+                            onOpenPreview = onOpenPreview,
+                        )
+
+                        else -> {}
                     }
-                    homeFeedSection(
-                        title = "排行 · ${rankingMode.label}",
-                        feed = HomeFeed.Ranking,
-                        feedState = categoryState.ranking,
-                        keyPrefix = category.name,
-                        clearItemSemantics = decorativeFeedSemantics,
-                        onLoadFeed = onLoadFeed,
-                        onOpenPreview = onOpenPreview,
-                    )
-                    homeFeedSection(
-                        title = "最新",
-                        feed = HomeFeed.Latest,
-                        feedState = categoryState.latest,
-                        keyPrefix = category.name,
-                        clearItemSemantics = decorativeFeedSemantics,
-                        onLoadFeed = onLoadFeed,
-                        onOpenPreview = onOpenPreview,
-                    )
                 }
                 item(
                     key = "home-refresh",
@@ -629,9 +659,9 @@ internal fun PixivSearchField(
 
 @Composable
 internal fun HomeEntryRow(
+    selectedFeed: HomeFeed,
     rankingLabel: String,
-    onRecommended: () -> Unit,
-    onRanking: () -> Unit,
+    onSelectFeedPage: (HomeFeed) -> Unit,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -641,14 +671,24 @@ internal fun HomeEntryRow(
             title = "推荐",
             subtitle = "查看推荐",
             icon = Icons.Default.Image,
-            onClick = onRecommended,
+            selected = selectedFeed == HomeFeed.Recommended,
+            onClick = { onSelectFeedPage(HomeFeed.Recommended) },
             modifier = Modifier.weight(1f),
         )
         HomeEntryButton(
             title = "排行",
             subtitle = rankingLabel,
             icon = Icons.Default.GridView,
-            onClick = onRanking,
+            selected = selectedFeed == HomeFeed.Ranking,
+            onClick = { onSelectFeedPage(HomeFeed.Ranking) },
+            modifier = Modifier.weight(1f),
+        )
+        HomeEntryButton(
+            title = "最新",
+            subtitle = "刚刚更新",
+            icon = Icons.Default.Schedule,
+            selected = selectedFeed == HomeFeed.Latest,
+            onClick = { onSelectFeedPage(HomeFeed.Latest) },
             modifier = Modifier.weight(1f),
         )
     }
@@ -659,17 +699,27 @@ internal fun HomeEntryButton(
     title: String,
     subtitle: String,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
+    selected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // 选中标记：填充主色容器 + 实心图标块，未选中保持描边浅色样式。
     Surface(
         modifier = modifier
             .height(58.dp)
             .clip(RoundedCornerShape(8.dp))
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(8.dp),
-        color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        color = if (selected) {
+            MaterialTheme.colorScheme.primaryContainer
+        } else {
+            MaterialTheme.colorScheme.surface
+        },
+        border = if (selected) {
+            BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
+        } else {
+            BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        },
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 10.dp),
@@ -679,8 +729,16 @@ internal fun HomeEntryButton(
             Surface(
                 modifier = Modifier.size(32.dp),
                 shape = RoundedCornerShape(8.dp),
-                color = MaterialTheme.colorScheme.primaryContainer,
-                contentColor = MaterialTheme.colorScheme.primary,
+                color = if (selected) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.primaryContainer
+                },
+                contentColor = if (selected) {
+                    MaterialTheme.colorScheme.onPrimary
+                } else {
+                    MaterialTheme.colorScheme.primary
+                },
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -690,14 +748,23 @@ internal fun HomeEntryButton(
                 Text(
                     text = title,
                     style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.SemiBold,
+                    fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold,
+                    color = if (selected) {
+                        MaterialTheme.colorScheme.onPrimaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    },
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
                     text = subtitle,
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = if (selected) {
+                        MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -841,9 +908,9 @@ internal fun RankingModeChips(
 }
 
 @Composable
-internal fun OverlayChip(text: String) {
+internal fun OverlayChip(text: String, modifier: Modifier = Modifier) {
     Surface(
-        modifier = Modifier.clearAndSetSemantics {},
+        modifier = modifier.clearAndSetSemantics {},
         shape = RoundedCornerShape(8.dp),
         color = MaterialTheme.colorScheme.scrim.copy(alpha = 0.58f),
         contentColor = MaterialTheme.colorScheme.onPrimary,

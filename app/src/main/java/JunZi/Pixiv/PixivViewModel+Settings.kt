@@ -5,6 +5,7 @@ import android.app.Application
 import JunZi.Pixiv.data.network.PixivImageProxy
 import JunZi.Pixiv.data.network.PixivNetworkConfig
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -127,6 +128,21 @@ internal fun PixivViewModel.saveFilteredTags() {
     _settingsState.update { it.copy(filteredTagsInput = normalized) }
     showMessage(if (normalized.isBlank()) "已清空过滤标签" else "已保存过滤标签")
     reloadFeedsAfterFilterChange()
+}
+/**
+ * 历史记录保留上限：0 = 不限，>0 = 只保留最近 N 条。
+ * 立即持久化并按新上限裁剪一次；下载记录不受影响（始终无上限）。
+ */
+internal fun PixivViewModel.updateHistoryLimit(value: Int) {
+    val normalized = value.coerceAtLeast(0)
+    historyStore.retentionLimit = normalized
+    store.saveHistoryLimit(normalized)
+    _settingsState.update { it.copy(historyLimit = normalized) }
+    viewModelScope.launch(Dispatchers.IO) { historyStore.trimToLimit() }
+    showMessage(
+        if (normalized <= 0) "历史记录上限：不限"
+        else "历史记录上限：$normalized 条",
+    )
 }
 internal fun PixivViewModel.reloadFeedsAfterFilterChange() {
     val search = _searchState.value

@@ -724,3 +724,285 @@ fun UserPreviewDto.toDomain(): UserPreview? {
 private fun firstNonBlank(vararg values: String?): String? {
     return values.firstOrNull { !it.isNullOrBlank() }?.trim()
 }
+
+// ==================== 特辑（Spotlight / pixivision） ====================
+
+@Immutable
+data class SpotlightArticle(
+    val id: Long,
+    val title: String,
+    val publishDate: String?,
+    val thumbnailUrl: String?,
+    val articleUrl: String?,
+)
+
+/** 特辑文章正文的原生内容块（pixivision 页面 DOM 解析产物）。 */
+@Immutable
+sealed interface PixivisionBlock {
+    data class Paragraph(val text: String) : PixivisionBlock
+    data class Heading(val text: String) : PixivisionBlock
+    data class Image(val url: String) : PixivisionBlock
+    data class BulletList(val items: List<String>) : PixivisionBlock
+
+    /** 文章里内嵌的 pixiv 作品卡：点击直接进应用内预览。 */
+    data class ArtworkCard(
+        val illustId: Long,
+        val title: String,
+        val authorName: String,
+        val thumbUrl: String?,
+    ) : PixivisionBlock
+}
+
+@Immutable
+data class PixivisionArticle(
+    val articleId: Long,
+    val title: String,
+    val publishDate: String?,
+    val coverUrl: String?,
+    val tags: List<String>,
+    val blocks: List<PixivisionBlock>,
+)
+
+// ==================== 珍藏册 top 聚合（/ajax/top/collection） ====================
+
+@Immutable
+data class PixivCollectionTagGroup(
+    val tag: String,
+    val items: List<PixivCollection>,
+)
+
+@Immutable
+data class PixivCollectionTop(
+    val recommend: List<PixivCollection>,
+    val everyone: List<PixivCollection>,
+    val tagGroups: List<PixivCollectionTagGroup>,
+)
+
+class WebCollectionTopBody(
+    @SerializedName("page") val page: WebCollectionTopPageDto? = null,
+    @SerializedName("thumbnails") val thumbnails: WebCollectionThumbnailsDto? = null,
+)
+
+class WebCollectionTopPageDto(
+    @SerializedName("recommendCollectionIds") val recommendIds: List<String>? = null,
+    @SerializedName("everyoneCollectionIds") val everyoneIds: List<String>? = null,
+    @SerializedName("tagRecommendCollectionIds") val tagGroups: List<WebCollectionTagGroupDto>? = null,
+)
+
+class WebCollectionTagGroupDto(
+    @SerializedName("tag") val tag: String? = null,
+    @SerializedName("ids") val ids: List<String>? = null,
+)
+
+// ==================== 珍藏册（Collection，web ajax） ====================
+
+@Immutable
+data class PixivCollection(
+    /** pixiv 珍藏册 ID 是 19~20 位数字，超出 Long，必须用 String 承载。 */
+    val id: String,
+    val userId: Long,
+    val userName: String,
+    val title: String,
+    val caption: String,
+    val tags: List<String>,
+    val thumbnailUrl: String?,
+    val bookmarkCount: Int,
+    val viewCount: Int,
+    val publishedDateTime: String?,
+)
+
+/** 珍藏册详情里的一块「区域」：引用的作品/小说，带在册内的网格布局。 */
+@Immutable
+data class PixivCollectionTile(
+    val tileId: String,
+    val workType: String,
+    val workId: Long,
+    val x: Int,
+    val y: Int,
+    val width: Int,
+    val height: Int,
+)
+
+@Immutable
+data class PixivCollectionDetail(
+    val collection: PixivCollection?,
+    val tiles: List<PixivCollectionTile>,
+    /** tile.workId -> 引用作品的封面模型（illust / novel），UI 点按与缩略图都用它。 */
+    val works: Map<Long, Illust> = emptyMap(),
+)
+
+class WebCollectionDto(
+    @SerializedName("id") val id: String? = null,
+    @SerializedName("userId") val userId: String? = null,
+    @SerializedName("userName") val userName: String? = null,
+    @SerializedName("title") val title: String? = null,
+    @SerializedName("caption") val caption: String? = null,
+    @SerializedName("tags") val tags: List<String>? = null,
+    @SerializedName("thumbnailImageUrl") val thumbnailImageUrl: String? = null,
+    @SerializedName("bookmarkCount") val bookmarkCount: Int? = null,
+    @SerializedName("viewCount") val viewCount: Int? = null,
+    @SerializedName("publishedDateTime") val publishedDateTime: String? = null,
+    @SerializedName("xRestrict") val xRestrict: Int? = null,
+    @SerializedName("sl") val sl: Int? = null,
+    @SerializedName("status") val status: String? = null,
+)
+
+fun WebCollectionDto.toDomain(): PixivCollection? {
+    val collectionId = id?.trim()?.takeIf { it.isNotBlank() } ?: return null
+    return PixivCollection(
+        id = collectionId,
+        userId = userId?.toLongOrNull() ?: 0L,
+        userName = userName.orEmpty(),
+        title = title.orEmpty(),
+        caption = caption.orEmpty(),
+        tags = tags.orEmpty().filter { it.isNotBlank() },
+        // embed 封面必须带 ?format=png：裸 URL 会被源站 400（官网前端也是自己拼的这个参数）。
+        thumbnailUrl = PixivImageProxy.convert(thumbnailImageUrl)?.withCollectionCoverFormat(),
+        bookmarkCount = bookmarkCount ?: 0,
+        viewCount = viewCount ?: 0,
+        publishedDateTime = publishedDateTime,
+    )
+}
+
+/** 珍藏册 embed 封面（/next/collection/.../thumbnail）补上必需的 ?format=png 参数。 */
+private fun String.withCollectionCoverFormat(): String {
+    if (!contains("/next/collection/") || contains("format=")) return this
+    return "$this?format=png"
+}
+
+class WebCollectionThumbnailsDto(
+    @SerializedName("collection") val collection: List<WebCollectionDto>? = null,
+    @SerializedName("illust") val illust: List<WebIllustThumbDto>? = null,
+    @SerializedName("novel") val novel: List<WebNovelThumbDto>? = null,
+)
+
+class WebCollectionsSearchBody(
+    @SerializedName("thumbnails") val thumbnails: WebCollectionThumbnailsDto? = null,
+)
+
+class WebCollectionDetailBody(
+    @SerializedName("thumbnails") val thumbnails: WebCollectionThumbnailsDto? = null,
+    @SerializedName("data") val data: WebCollectionDataDto? = null,
+)
+
+class WebCollectionDataDto(
+    @SerializedName("detail") val detail: WebCollectionDetailDto? = null,
+)
+
+class WebCollectionDetailDto(
+    @SerializedName("tiles") val tiles: List<WebCollectionTileDto>? = null,
+)
+
+class WebCollectionTileDto(
+    @SerializedName("id") val id: String? = null,
+    @SerializedName("status") val status: String? = null,
+    @SerializedName("type") val type: String? = null,
+    @SerializedName("workType") val workType: String? = null,
+    @SerializedName("workId") val workId: String? = null,
+    @SerializedName("layout") val layout: WebCollectionTileLayoutDto? = null,
+)
+
+class WebCollectionTileLayoutDto(
+    @SerializedName("position") val position: WebCollectionTilePointDto? = null,
+    @SerializedName("size") val size: WebCollectionTilePointDto? = null,
+)
+
+class WebCollectionTilePointDto(
+    @SerializedName("x") val x: Int? = null,
+    @SerializedName("y") val y: Int? = null,
+)
+
+/** pixiv web ajax 的作品缩略图（珍藏册 tiles 用）。 */
+class WebIllustThumbDto(
+    @SerializedName("id") val id: String? = null,
+    @SerializedName("title") val title: String? = null,
+    @SerializedName("illustType") val illustType: Int? = null,
+    @SerializedName("xRestrict") val xRestrict: Int? = null,
+    @SerializedName("sl") val sl: Int? = null,
+    @SerializedName("url") val url: String? = null,
+    @SerializedName("userId") val userId: String? = null,
+    @SerializedName("userName") val userName: String? = null,
+    @SerializedName("pageCount") val pageCount: Int? = null,
+    @SerializedName("width") val width: Int? = null,
+    @SerializedName("height") val height: Int? = null,
+    @SerializedName("createDate") val createDate: String? = null,
+    @SerializedName("tags") val tags: List<String>? = null,
+)
+
+class WebNovelThumbDto(
+    @SerializedName("id") val id: String? = null,
+    @SerializedName("title") val title: String? = null,
+    @SerializedName("url") val url: String? = null,
+    @SerializedName("userId") val userId: String? = null,
+    @SerializedName("userName") val userName: String? = null,
+    @SerializedName("series") val series: WebNovelSeriesDto? = null,
+    @SerializedName("tags") val tags: List<String>? = null,
+)
+
+class WebNovelSeriesDto(
+    @SerializedName("id") val id: String? = null,
+    @SerializedName("title") val title: String? = null,
+)
+
+fun WebIllustThumbDto.toDomain(): Illust? {
+    val thumbId = id?.toLongOrNull()?.takeIf { it > 0L } ?: return null
+    val preview = PixivImageProxy.convert(url)
+    val type = when (illustType) {
+        1 -> "manga"
+        2 -> "ugoira"
+        else -> "illust"
+    }
+    val pageUrlList = listOfNotNull(preview)
+    return Illust(
+        id = thumbId,
+        title = title.orEmpty(),
+        authorId = userId?.toLongOrNull() ?: 0L,
+        authorName = userName.orEmpty(),
+        authorAccount = "",
+        authorAvatarUrl = null,
+        type = type,
+        caption = "",
+        previewUrl = preview,
+        imageUrls = pageUrlList,
+        imagePages = pageUrlList.map { IllustImagePage(url = it, width = width ?: 1, height = height ?: 1) },
+        tags = tags.orEmpty().take(8),
+        pageCount = pageCount ?: 1,
+        width = width ?: 1,
+        height = height ?: 1,
+        totalBookmarks = 0,
+        totalView = 0,
+        isBookmarked = false,
+        aiType = null,
+        createDate = createDate,
+    )
+}
+
+fun WebNovelThumbDto.toDomain(): Illust? {
+    val novelId = id?.toLongOrNull()?.takeIf { it > 0L } ?: return null
+    val preview = PixivImageProxy.convert(url)
+    val pageUrlList = listOfNotNull(preview)
+    return Illust(
+        id = novelId,
+        title = title.orEmpty(),
+        authorId = userId?.toLongOrNull() ?: 0L,
+        authorName = userName.orEmpty(),
+        authorAccount = "",
+        authorAvatarUrl = null,
+        type = "novel",
+        caption = "",
+        previewUrl = preview,
+        imageUrls = pageUrlList,
+        imagePages = pageUrlList.map { IllustImagePage(url = it, width = 600, height = 900) },
+        tags = tags.orEmpty().take(8),
+        pageCount = 1,
+        width = 600,
+        height = 900,
+        totalBookmarks = 0,
+        totalView = 0,
+        isBookmarked = false,
+        aiType = null,
+        createDate = null,
+        seriesId = series?.id?.toLongOrNull()?.takeIf { it > 0L },
+        seriesTitle = series?.title?.takeIf { it.isNotBlank() },
+    )
+}

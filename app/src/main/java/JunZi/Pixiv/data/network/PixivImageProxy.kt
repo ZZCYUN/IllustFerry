@@ -76,6 +76,9 @@ object PixivImageProxy {
     fun candidateUrls(url: HttpUrl): List<HttpUrl> {
         val host = url.host.lowercase()
         val currentProxy = activeProxy
+        // 非 pximg 图片 host（embed.pixiv.net 的珍藏册封面 / pixivision ogimage 等）
+        // 必须原样返回：之前一律改写成 i.pximg.net，embed 域全部 404。
+        if (!host.isPixivImageHost()) return listOf(url)
         val originalHost = when (host) {
             PIXIV_SECURE_HOST -> PIXIV_SECURE_HOST
             else -> PIXIV_IMAGE_HOST
@@ -84,7 +87,6 @@ object PixivImageProxy {
             return listOf(url.withHost(originalHost)).distinctBy { it.toString() }
         }
         if (host == currentProxy.host) return listOf(url)
-        if (!host.isPixivImageHost()) return listOf(url)
         if (!url.shouldUseProxy()) return listOf(url)
 
         val primary = url.withProxyOrigin(currentProxy)

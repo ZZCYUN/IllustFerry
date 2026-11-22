@@ -19,6 +19,9 @@ import JunZi.Pixiv.data.model.UploadNovelRequest
 import JunZi.Pixiv.data.model.UploadNovelResponse
 import JunZi.Pixiv.data.model.UploadStatusResponse
 import JunZi.Pixiv.data.model.UgoiraMetadataResponse
+import JunZi.Pixiv.data.model.WebCollectionDetailBody
+import JunZi.Pixiv.data.model.WebCollectionTopBody
+import JunZi.Pixiv.data.model.WebCollectionsSearchBody
 import com.google.gson.Gson
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -745,6 +748,111 @@ class PixivApiClient(
             .build()
     }
 
+    // ==================== 特辑（Spotlight / pixivision） ====================
+
+    /** 特辑分类页 HTML（pixivision 官网 c/{category} 及其 ?p=N 翻页），交给 Jsoup 解析。 */
+    suspend fun spotlightPageHtml(url: String): String = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url(url)
+            .header("User-Agent", WEB_AJAX_USER_AGENT)
+            .header("Accept", "text/html")
+            .get()
+            .build()
+        OkHttpProvider.webAjaxClient().newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                throw PixivApiException(response.code, "HTTP ${response.code}: ${response.message}")
+            }
+            response.body.string()
+        }
+    }
+
+    // ==================== 珍藏册（Collection，web ajax，匿名可读） ====================
+
+    /**
+     * 珍藏册列表。pixiv 网页 Next.js 版数据接口：
+     * GET https://www.pixiv.net/ajax/collections/search?mode=all&limit=..&offset=..
+     * body.thumbnails.collection 按页返回公开珍藏册卡片。
+     */
+    suspend fun collectionsSearch(
+        mode: String = "all",
+        limit: Int = 12,
+        offset: Int = 0,
+    ): WebCollectionsSearchBody = withContext(Dispatchers.IO) {
+        val url = "https://www.pixiv.net/ajax/collections/search".toHttpUrl().newBuilder()
+            .addQueryParameter("mode", mode)
+            .addQueryParameter("limit", limit.coerceIn(1, 30).toString())
+            .addQueryParameter("offset", offset.coerceAtLeast(0).toString())
+            .build()
+        val request = webAjaxGet(url.toString())
+        webAjaxExecute(request, WebCollectionsSearchBody::class.java)
+    }
+
+    /** 珍藏册详情：data.detail.tiles 为「区域」网格，thumbnails.illust/novel 为引用的作品。 */
+    suspend fun collectionDetail(collectionId: String): WebCollectionDetailBody = withContext(Dispatchers.IO) {
+        val url = "https://www.pixiv.net/ajax/collection/$collectionId"
+        webAjaxExecute(webAjaxGet(url), WebCollectionDetailBody::class.java)
+    }
+
+    /** 珍藏册首页聚合：recommend / everyone / tagRecommend 分组 + 缩略图映射。 */
+    suspend fun collectionTop(lang: String = "zh"): WebCollectionTopBody = withContext(Dispatchers.IO) {
+        val url = "https://www.pixiv.net/ajax/top/collection".toHttpUrl().newBuilder()
+            .addQueryParameter("lang", lang)
+            .build()
+        webAjaxExecute(webAjaxGet(url.toString()), WebCollectionTopBody::class.java)
+    }
+
+    /**
+     * 特辑文章正文页 HTML（pixivision 无公开 API，官方 App 也是 WebView 打开 article_url；
+     * 这里抓回来交给 Jsoup 解析成原生内容块）。
+     */
+    suspend fun spotlightArticleHtml(articleId: Long, lang: String = "zh"): String = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url("https://www.pixivision.net/$lang/a/$articleId")
+            .header("User-Agent", WEB_AJAX_USER_AGENT)
+            .header("Accept", "text/html")
+            .get()
+            .build()
+        OkHttpProvider.webAjaxClient().newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                throw PixivApiException(response.code, "HTTP ${response.code}: ${response.message}")
+            }
+            response.body.string()
+        }
+    }
+
+    private fun webAjaxGet(url: String): Request {
+        return Request.Builder()
+            .url(url)
+            .header("User-Agent", WEB_AJAX_USER_AGENT)
+            .header("Referer", "https://www.pixiv.net/collection")
+            .header("Accept", "application/json")
+            .get()
+            .build()
+    }
+
+    /**
+     * web ajax 信封是 {"error":bool,"message":str,"body":...}；出错时 body 可能是数组
+     * 而非对象，所以先按 JsonObject 解包再转 body，保证错误信息可读。
+     */
+    private fun <T> webAjaxExecute(request: Request, bodyType: Class<T>): T {
+        return OkHttpProvider.webAjaxClient().newCall(request).execute().use { response ->
+            val payload = response.body.string()
+            if (!response.isSuccessful) {
+                throw PixivApiException(response.code, "HTTP ${response.code}: ${response.message}", payload.take(240))
+            }
+            val root = runCatching { gson.fromJson(payload, com.google.gson.JsonObject::class.java) }.getOrNull()
+                ?: throw PixivApiException(response.code, "珍藏册接口返回了非 JSON 内容", payload.take(240))
+            val failed = root.get("error")?.takeIf { it.isJsonPrimitive }?.asBoolean ?: false
+            if (failed) {
+                val message = root.get("message")?.takeIf { it.isJsonPrimitive }?.asString.orEmpty()
+                throw PixivApiException(response.code, message.ifBlank { "珍藏册接口请求失败" }, payload.take(240))
+            }
+            val body = root.get("body")?.takeIf { !it.isJsonNull }
+                ?: throw PixivApiException(response.code, "珍藏册接口没有返回数据", payload.take(240))
+            gson.fromJson(body, bodyType)
+        }
+    }
+
     private fun authorizedPost(url: String, accessToken: String, body: FormBody): Request {
         return Request.Builder()
             .url(url)
@@ -803,5 +911,9 @@ class PixivApiClient(
     private companion object {
         private const val API_BASE = "https://app-api.pixiv.net"
         private const val FILTER_FOR_IOS = "for_ios"
+
+        /** web ajax 需要浏览器 UA；App UA 不被 web 路由接受时仍能保持匿名可读。 */
+        private const val WEB_AJAX_USER_AGENT =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
     }
 }

@@ -250,7 +250,11 @@ class LocalPixivProxy(
     private fun openMitmUpstream(host: String, port: Int): Socket {
         val candidates = mitmUpstreamCandidates(host)
         val echConfig = PixivNetworkConfig.echConfig
-        val useEch = echConfig != null && PixivHost.from(host)?.isCloudflareFronted == true
+        // 未单独列出但同为 *.pixiv.net / *.pixivision.net 的子域（embed.pixiv.net 等）
+        // 也在 Cloudflare 后面，必须走 ECH；枚举外的 host 不能误判成 Tokyo 无 SNI。
+        val isCloudflareFronted = PixivHost.from(host)?.isCloudflareFronted
+            ?: (host.endsWith(".pixiv.net") || host.endsWith(".pixivision.net"))
+        val useEch = echConfig != null && isCloudflareFronted
         var lastFailure: Throwable? = null
         for (candidate in candidates) {
             if (EchTunnel.available) {
@@ -1049,12 +1053,14 @@ class LocalPixivProxy(
         // 所有 pixiv 自家域名一律 MITM——透明 CONNECT 会被 GFW 的 SNI DPI 直接 RST，
         // 5 秒拨号反复超时就是用户报的"大量等待"。靠白名单穷举子域（embed / fanbox 商品页
         // / 新拆出来的子站）永远赶不上运营节奏，按 eTLD+1 后缀放行更稳。
+        // pixivision.net（精选特辑站，CF 前置）一并 MITM，走 openMitmUpstream 的 ECH 模式。
         // d.pixiv.org 单独列：是 pixiv 自家但 TLD 不一样。被 BLOCKED_EXACT_HOSTS 拦下来的
         // a.pixiv.org / lc-event.pixiv.net 已经在 isBlockedHost 阶段 502 短路，不会落到这里。
         val MITM_HOST_SUFFIXES: List<String> = listOf(
             "pixiv.net",
             "pximg.net",
             "pixivsketch.net",
+            "pixivision.net",
         )
 
         val MITM_EXACT_HOSTS: Set<String> = setOf(

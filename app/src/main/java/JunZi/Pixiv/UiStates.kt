@@ -27,9 +27,14 @@ import JunZi.Pixiv.data.model.Illust
 import JunZi.Pixiv.data.model.IllustComment
 import JunZi.Pixiv.data.model.IllustPage
 import JunZi.Pixiv.data.model.NovelDetail
+import JunZi.Pixiv.data.model.PixivCollection
+import JunZi.Pixiv.data.model.PixivCollectionDetail
+import JunZi.Pixiv.data.model.PixivCollectionTop
+import JunZi.Pixiv.data.model.PixivisionArticle
 import JunZi.Pixiv.data.model.RankingMode
 import JunZi.Pixiv.data.model.SearchSort
 import JunZi.Pixiv.data.model.SearchTarget
+import JunZi.Pixiv.data.model.SpotlightArticle
 import JunZi.Pixiv.data.model.TrendingTag
 import JunZi.Pixiv.data.model.UploadIllustRequest
 import JunZi.Pixiv.data.model.UploadImagePart
@@ -66,6 +71,9 @@ enum class AppScreen {
     Search,
     Me,
     Settings,
+    Spotlight,
+    SpotlightArticle,
+    CollectionDetail,
     Preview,
     Author,
     NovelReader,
@@ -81,6 +89,9 @@ internal fun AppScreen.defaultBackTarget(): AppScreen {
         AppScreen.Search -> AppScreen.Home
         AppScreen.Me -> AppScreen.Home
         AppScreen.Settings -> AppScreen.Me
+        AppScreen.Spotlight -> AppScreen.Home
+        AppScreen.SpotlightArticle -> AppScreen.Spotlight
+        AppScreen.CollectionDetail -> AppScreen.Home
         AppScreen.Preview -> AppScreen.Home
         AppScreen.Author -> AppScreen.Home
         AppScreen.NovelReader -> AppScreen.Home
@@ -174,6 +185,15 @@ enum class BookmarkKind {
     Novel,
 }
 
+/** 历史记录保留上限预设；0 = 不限。下载记录不设上限。 */
+enum class HistoryLimitOption(val value: Int, val label: String) {
+    Unlimited(0, "不限"),
+    L500(500, "500 条"),
+    L1000(1000, "1000 条"),
+    L2000(2000, "2000 条"),
+    L5000(5000, "5000 条"),
+}
+
 enum class SearchKind {
     Illust,
     Novel,
@@ -217,15 +237,90 @@ data class HomeCategoryState(
     val hasLoaded: Boolean = false,
 )
 
+/** 首页顶部 Tab：插画 / 漫画 / 小说 / 珍藏册。 */
+enum class HomeTopTab(val category: HomeCategory?, val label: String) {
+    Illust(HomeCategory.Illust, "插画"),
+    Manga(HomeCategory.Manga, "漫画"),
+    Novel(HomeCategory.Novel, "小说"),
+    CollectionBooks(null, "珍藏册"),
+}
+
+/** 首页入口行的三个子页面标签。 */
+internal val HomeFeed.pageLabel: String
+    get() = when (this) {
+        HomeFeed.Walkthrough -> "浏览"
+        HomeFeed.Recommended -> "推荐"
+        HomeFeed.Ranking -> "排行"
+        HomeFeed.Latest -> "最新"
+    }
+
 @Immutable
 data class HomeState(
     val category: HomeCategory = HomeCategory.Illust,
+    val topTab: HomeTopTab = HomeTopTab.Illust,
+    /** 首页入口行选中的子页面（推荐/排行/最新），原地切换不跳转。 */
+    val feedPage: HomeFeed = HomeFeed.Recommended,
     val walkthrough: FeedState = FeedState(),
     val illust: HomeCategoryState = HomeCategoryState(rankingMode = RankingMode.Day),
     val manga: HomeCategoryState = HomeCategoryState(rankingMode = RankingMode.DayManga),
     val novel: HomeCategoryState = HomeCategoryState(rankingMode = RankingMode.DayNovel),
     val diagnostics: DiagnosticsState = DiagnosticsState(),
     val hasLoaded: Boolean = false,
+)
+
+/**
+ * 特辑分类：app-api /v1/spotlight/articles 只提供 all/manga 且与官网分类对不上，
+ * 三个分类统一解析 pixivision 官网分类页（c/illustration、c/manga、c/novel，各为最新 10 篇）。
+ */
+enum class SpotlightCategory(val path: String, val label: String) {
+    Illustration("illustration", "插画"),
+    Manga("manga", "漫画"),
+    // 注意：pixivision 小说分类的 slug 是复数 novels（/zh/c/novel 是 404）。
+    Novel("novels", "小说"),
+}
+
+@Immutable
+data class SpotlightFeedState(
+    val items: List<SpotlightArticle> = emptyList(),
+    val nextUrl: String? = null,
+    val isLoading: Boolean = false,
+    val error: String? = null,
+)
+
+@Immutable
+data class SpotlightArticleState(
+    val isLoading: Boolean = false,
+    val article: PixivisionArticle? = null,
+    val error: String? = null,
+)
+
+@Immutable
+data class SpotlightState(
+    val selectedCategory: SpotlightCategory = SpotlightCategory.Illustration,
+    val feeds: Map<SpotlightCategory, SpotlightFeedState> = emptyMap(),
+    /** 当前打开的特辑文章（原生渲染 PixivisionArticle 内容块）。 */
+    val article: SpotlightArticle? = null,
+    val articleState: SpotlightArticleState = SpotlightArticleState(),
+)
+
+@Immutable
+data class CollectionDetailState(
+    val collection: PixivCollection? = null,
+    val detail: PixivCollectionDetail? = null,
+    val isLoading: Boolean = false,
+    val error: String? = null,
+)
+
+/** 珍藏册浏览页：top 聚合（推荐/大家都在看/标签组）+ search?mode=all 分页追加。 */
+@Immutable
+data class CollectionBooksState(
+    val top: PixivCollectionTop? = null,
+    val all: List<PixivCollection> = emptyList(),
+    val nextOffset: Int = 0,
+    val hasMore: Boolean = false,
+    val isLoadingTop: Boolean = false,
+    val isLoadingMore: Boolean = false,
+    val error: String? = null,
 )
 
 @Immutable
@@ -488,6 +583,8 @@ data class SettingsUiState(
     val imageProxyInput: String = PixivImageProxy.DEFAULT_PROXY_ORIGIN,
     val saveUgoiraZip: Boolean = false,
     val filteredTagsInput: String = "",
+    /** 历史记录保留上限（条）；0 = 不限，默认 1000。仅作用于历史，下载始终无上限。 */
+    val historyLimit: Int = JunZi.Pixiv.data.local.DEFAULT_HISTORY_RETENTION_LIMIT,
     val ugoiraSaveFormat: UgoiraSaveFormat = UgoiraSaveFormat.WEBP,
     val previewSwipeMode: PreviewSwipeMode = PreviewSwipeMode.Horizontal,
     val relatedWorksLayout: RelatedWorksLayout = RelatedWorksLayout.Horizontal,

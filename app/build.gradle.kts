@@ -79,6 +79,8 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     implementation("com.squareup.okhttp3:okhttp:5.3.2")
     implementation("com.google.code.gson:gson:2.14.0")
+    // pixivision 特辑文章正文解析（DOM 精确抓取）
+    implementation("org.jsoup:jsoup:1.18.3")
     implementation("com.github.bumptech.glide:glide:5.0.7")
     implementation("com.github.bumptech.glide:okhttp3-integration:5.0.7")
     implementation("com.github.bumptech.glide:gifencoder-integration:5.0.7")

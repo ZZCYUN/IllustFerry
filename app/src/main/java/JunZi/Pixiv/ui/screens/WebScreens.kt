@@ -94,7 +94,9 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -313,6 +315,8 @@ internal fun ProxiedPixivWebViewScreen(
     title: String,
     initialUrl: String,
     onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+    contentWindowInsets: WindowInsets = WindowInsets.safeDrawing,
     onInterceptUrl: (Uri, Boolean) -> Boolean = { _, _ -> false },
 ) {
     val context = LocalContext.current
@@ -394,6 +398,7 @@ internal fun ProxiedPixivWebViewScreen(
     }
 
     Scaffold(
+        modifier = modifier,
         topBar = {
             TopAppBar(
                 title = { Text(title) },
@@ -404,7 +409,7 @@ internal fun ProxiedPixivWebViewScreen(
                 },
             )
         },
-        contentWindowInsets = WindowInsets.safeDrawing,
+        contentWindowInsets = contentWindowInsets,
     ) { padding ->
         Box(
             modifier = Modifier

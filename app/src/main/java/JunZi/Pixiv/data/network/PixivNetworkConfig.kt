@@ -35,12 +35,14 @@ object PixivNetworkConfig {
         if (!shouldUseCompatibilityClient()) return emptyList()
         val normalized = host?.trim()?.lowercase()?.removeSuffix(".") ?: return emptyList()
         hostToIps[normalized]?.let { return it }
-        // *.pximg.net / *.pixivision.net 这两类子域和主域共用同一组 IP，
-        // 命中主域的运行时记录就直接复用；其它通配 host 在缓存里没值时返回空，
-        // 由调用方等待动态路由就绪或对非 Pixiv 域名显式走普通网络路径。
+        // *.pximg.net / *.pixivision.net / *.pixiv.net 这三类子域和主域共用同一组 IP：
+        // pximg 走 Tokyo 源站，pixivision 与 pixiv.net 子域（含 embed.pixiv.net 等
+        // 未单独列出的子域）同在 Cloudflare 后面，复用 www 的 CF IP 走 ECH。
+        // 其它通配 host 在缓存里没值时返回空，由调用方等待动态路由就绪或显式走普通网络路径。
         return when {
             normalized.endsWith(".pximg.net") -> hostToIps[PixivHost.Image.rawHost].orEmpty()
             normalized.endsWith(".pixivision.net") -> hostToIps[PixivHost.Pixivision.rawHost].orEmpty()
+            normalized.endsWith(".pixiv.net") -> hostToIps[PixivHost.Web.rawHost].orEmpty()
             else -> emptyList()
         }
     }
@@ -79,7 +81,8 @@ object PixivNetworkConfig {
         val normalized = host?.trim()?.lowercase()?.removeSuffix(".") ?: return false
         return PixivHost.from(normalized) != null ||
             normalized.endsWith(".pximg.net") ||
-            normalized.endsWith(".pixivision.net")
+            normalized.endsWith(".pixivision.net") ||
+            normalized.endsWith(".pixiv.net")
     }
 
     fun snapshot(): Map<String, String> = hostToIps

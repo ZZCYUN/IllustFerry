@@ -56,7 +56,7 @@ internal fun PixivViewModel.enqueueNovelDownload(illust: Illust) {
                 it.illustId == illust.id && it.illust?.type.equals("novel", ignoreCase = true)
             },
         )
-        store.saveDownloads(downloads.items)
+        downloadStore.replaceAll(downloads.items)
         state.copy(downloads = downloads)
     }
     showMessage("已加入小说下载队列")
@@ -105,7 +105,7 @@ internal fun PixivViewModel.enqueueIllustDownload(illust: Illust) {
 
     _mineState.update { state ->
         val downloads = state.downloads.copy(items = listOf(job) + state.downloads.items.filterNot { it.illustId == illust.id })
-        store.saveDownloads(downloads.items)
+        downloadStore.replaceAll(downloads.items)
         state.copy(downloads = downloads)
     }
     showMessage("已加入下载队列")
@@ -116,7 +116,7 @@ internal fun PixivViewModel.deleteDownloadItem(key: String) {
         val downloads = state.downloads.copy(
             items = state.downloads.items.filterNot { it.key == key },
         )
-        store.saveDownloads(downloads.items)
+        downloadStore.replaceAll(downloads.items)
         state.copy(downloads = downloads)
     }
     showMessage("已删除下载记录")
@@ -448,7 +448,7 @@ internal fun PixivViewModel.updateDownload(
             },
         )
         if (persist) {
-            store.saveDownloads(downloads.items)
+            downloadStore.replaceAll(downloads.items)
         }
         state.copy(downloads = downloads)
     }

@@ -14,9 +14,17 @@ import JunZi.Pixiv.data.model.IllustCommentPage
 import JunZi.Pixiv.data.model.IllustPage
 import JunZi.Pixiv.data.model.NovelDetail
 import JunZi.Pixiv.data.model.NovelTextPayload
+import JunZi.Pixiv.data.model.PixivCollection
+import JunZi.Pixiv.data.model.PixivCollectionDetail
+import JunZi.Pixiv.data.model.PixivCollectionTagGroup
+import JunZi.Pixiv.data.model.PixivCollectionTile
+import JunZi.Pixiv.data.model.PixivCollectionTop
+import JunZi.Pixiv.data.model.PixivisionArticle
 import JunZi.Pixiv.data.model.RankingMode
 import JunZi.Pixiv.data.model.SearchSort
+import JunZi.Pixiv.SpotlightCategory
 import JunZi.Pixiv.data.model.SearchTarget
+import JunZi.Pixiv.data.model.SpotlightArticle
 import JunZi.Pixiv.data.model.TrendingTag
 import JunZi.Pixiv.data.model.UgoiraFrameImage
 import JunZi.Pixiv.data.model.UploadIllustRequest
@@ -196,6 +204,91 @@ class PixivRepository(
     suspend fun trendingTags(token: String): List<TrendingTag> {
         val response = api.trendingTags(token)
         return response.trendTags.orEmpty().mapNotNull { it.toDomain() }
+    }
+
+    // ==================== 特辑（Spotlight / pixivision） ====================
+
+    /**
+     * 特辑分类列表：解析 pixivision 官网分类页（插画/漫画/小说，每页 20 篇），
+     * 返回条目与下一页地址（?p=N，null = 没有更多）。
+     * app-api /v1/spotlight/articles 只有 all/manga 且与官网分类对不上，弃用。
+     * 解析放 Default 线程，不卡主线程。
+     */
+    suspend fun spotlightCategoryPage(category: SpotlightCategory, lang: String = "zh"): SpotlightCategoryPage =
+        spotlightCategoryPage("https://www.pixivision.net/$lang/c/${category.path}")
+
+    suspend fun spotlightCategoryPage(url: String): SpotlightCategoryPage =
+        withContext(Dispatchers.Default) {
+            val html = api.spotlightPageHtml(url)
+            val (items, nextUrl) = JunZi.Pixiv.data.local.PixivisionArticleParser.parseCategoryArticles(html)
+            SpotlightCategoryPage(items = items, nextUrl = nextUrl)
+        }
+
+    // ==================== 珍藏册（Collection，web ajax，匿名可读） ====================
+
+    suspend fun collectionBooks(limit: Int, offset: Int): List<PixivCollection> {
+        val response = api.collectionsSearch(mode = "all", limit = limit, offset = offset)
+        return response.thumbnails?.collection.orEmpty().mapNotNull { it.toDomain() }
+    }
+
+    /** 珍藏册首页聚合（recommend / everyone / tagRecommend 三组）。 */
+    suspend fun collectionTop(lang: String = "zh"): PixivCollectionTop {
+        val response = api.collectionTop(lang)
+        val byId = response.thumbnails?.collection.orEmpty()
+            .mapNotNull { it.toDomain() }
+            .associateBy { it.id }
+        fun pick(ids: List<String>?) = ids.orEmpty().mapNotNull { id -> id.trim().takeIf { it.isNotBlank() }?.let { byId[it] } }
+        return PixivCollectionTop(
+            recommend = pick(response.page?.recommendIds),
+            everyone = pick(response.page?.everyoneIds),
+            tagGroups = response.page?.tagGroups.orEmpty().mapNotNull { group ->
+                val tag = group.tag?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                PixivCollectionTagGroup(tag = tag, items = pick(group.ids))
+            },
+        )
+    }
+
+    /** 特辑文章正文：抓 pixivision 页面 HTML，Jsoup 解析放到 Default 线程避免卡主线程。 */
+    suspend fun spotlightArticleDetail(articleId: Long, lang: String = "zh"): PixivisionArticle =
+        withContext(kotlinx.coroutines.Dispatchers.Default) {
+            val html = api.spotlightArticleHtml(articleId, lang)
+            JunZi.Pixiv.data.local.PixivisionArticleParser.parse(articleId, html)
+        }
+
+    suspend fun collectionDetail(collectionId: String): PixivCollectionDetail {
+        val response = api.collectionDetail(collectionId)
+        val thumbnails = response.thumbnails
+        val self = thumbnails?.collection.orEmpty()
+            .firstOrNull { it.id == collectionId }
+            ?.toDomain()
+            ?: thumbnails?.collection.orEmpty().firstOrNull()?.toDomain()
+        val thumbs = thumbnails
+        val tileDtos = response.data?.detail?.tiles.orEmpty()
+            .filter { tile -> tile.status == null || tile.status == "Active" }
+        val novelById = thumbs?.novel.orEmpty().associateBy { it.id }
+        val works = buildMap {
+            thumbs?.illust.orEmpty().forEach { thumb -> thumb.toDomain()?.let { put(it.id, it) } }
+            thumbs?.novel.orEmpty().forEach { thumb -> thumb.toDomain()?.let { put(it.id, it) } }
+        }
+        val tiles = tileDtos.mapNotNull { tile ->
+            val workId = tile.workId?.toLongOrNull()?.takeIf { it > 0L } ?: return@mapNotNull null
+            val workType = tile.workType?.takeIf { it.isNotBlank() }
+                ?: if (novelById.containsKey(tile.workId)) "novel" else "illust"
+            PixivCollectionTile(
+                tileId = tile.id ?: "$workId",
+                workType = workType,
+                workId = workId,
+                x = tile.layout?.position?.x ?: 0,
+                y = tile.layout?.position?.y ?: 0,
+                width = tile.layout?.size?.x ?: 1,
+                height = tile.layout?.size?.y ?: 1,
+            )
+        }
+        return PixivCollectionDetail(
+            collection = self,
+            tiles = tiles.sortedWith(compareBy({ it.y }, { it.x })),
+            works = works,
+        )
     }
 
     suspend fun userWorks(userId: Long, token: String, type: String = "illust"): IllustPage {
@@ -604,6 +697,11 @@ data class UgoiraDownloadResult(
     val animatedBytes: ByteArray,
     val format: UgoiraSaveFormat,
     val zipBytes: ByteArray?,
+)
+
+data class SpotlightCategoryPage(
+    val items: List<SpotlightArticle>,
+    val nextUrl: String?,
 )
 
 /** 动图处理的两个阶段：先整包下载，再逐帧合成。 */
