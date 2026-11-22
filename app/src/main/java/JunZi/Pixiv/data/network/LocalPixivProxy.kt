@@ -190,7 +190,7 @@ class LocalPixivProxy(
         target: Authority,
         executor: ExecutorService,
     ) {
-        // 透明隧道用 5 秒拨号截止——pixiv 自家拨不通的子域 / 没在 block 表里的第三方
+        // 透明隧道用 5 秒拨号截止——不可达的子域 / 没在 block 表里的第三方
         // 走到这里就别再陪它磨 20 秒，省得 WebView 等所有子资源齐了才放 onPageFinished。
         val upstream = connectUpstream(target.host, target.port, 5_000)
         upstream.soTimeout = 0
@@ -238,11 +238,11 @@ class LocalPixivProxy(
      *
      * TLS 全部下沉到 Go 隧道层（libillust_ech.so）完成，Java 侧拿到的是明文 HTTP 流：
      *   - Cloudflare 前置域（app-api / oauth / accounts / source / www / pixivision）：
-     *     ECH 模式 —— 外层 SNI 是 cloudflare-ech.com（不在 GFW 阻断名单），内层 SNI
+     *     ECH 模式 —— 外层 SNI 用 cloudflare-ech.com 的 public_name，内层 SNI
      *     才是真实域名，完整证书校验。pixiv 域名自己的 HTTPS RR 不发布 ech 参数，
      *     config 统一来自 cloudflare-ech.com 的 HTTPS RR（见 PixivDnsUpdater）。
-     *   - Tokyo 自有源站（public-api / *.pximg.net）：无 SNI 模式 —— ClientHello 不带
-     *     SNI 扩展绕开 GFW DPI，握手后按证书 SAN 补主机名校验。
+     *   - Tokyo 自有源站（public-api / *.pximg.net）：无 SNI 模式 —— 按解析到的 IP 直连
+     *     并省略 ClientHello 的 SNI 扩展，握手后按证书 SAN 补主机名校验。
      *
      * 候选 IP 逐个尝试（TCP+TLS 原子回退，沿用原有语义）。Go 库不可用时回退到旧的
      * JVM 无 SNI 链路（仅对 Tokyo 域有效；CF 域没有 SNI 无法路由，会直接失败）。
@@ -615,10 +615,9 @@ class LocalPixivProxy(
 
     private fun createUpstreamTlsSocket(upstream: Socket, host: String, port: Int): SSLSocket {
         // peerHost 必须传 IP literal：JSSE 看到 IP 就会把 SNI 扩展整个略掉（RFC 6066
-        // 不允许 SNI 是 IP）。GFW 的 SNI DPI 没有 www.pixiv.net 可匹配，就不会注 RST。
-        // 一旦把 hostname 传进去或者显式 serverNames=SNIHostName(host)，墙立刻命中。
-        // 配对依赖：www.pixiv.net 的候选 IP 必须来自 Pixiv Tokyo 段（见 PixivDnsUpdater），
-        // CF 节点没有 SNI 是无法路由的。
+        // 不允许 SNI 是 IP）。这条无 SNI 链路依赖候选 IP 与证书域名匹配，由握手后的
+        // 证书校验兜底；配对依赖：www.pixiv.net 的候选 IP 必须来自 Pixiv Tokyo 段
+        // （见 PixivDnsUpdater），CF 节点没有 SNI 是无法路由的。
         val dialHost = upstream.inetAddress.hostAddress ?: host
         reportState("upstream tls strategy no-sni $host via $dialHost:$port")
         val socket = (clientSslContext.socketFactory.createSocket(upstream, dialHost, port, true) as SSLSocket)
@@ -1050,9 +1049,9 @@ class LocalPixivProxy(
     )
 
     companion object {
-        // 所有 pixiv 自家域名一律 MITM——透明 CONNECT 会被 GFW 的 SNI DPI 直接 RST，
-        // 5 秒拨号反复超时就是用户报的"大量等待"。靠白名单穷举子域（embed / fanbox 商品页
-        // / 新拆出来的子站）永远赶不上运营节奏，按 eTLD+1 后缀放行更稳。
+        // pixiv 自家域名统一 MITM：透明 CONNECT 在部分网络环境下握手不稳定，容易反复
+        // 拨号超时。靠白名单穷举子域（embed / fanbox 商品页 / 新拆出来的子站）永远赶不上
+        // 运营节奏，按 eTLD+1 后缀放行更稳。
         // pixivision.net（精选特辑站，CF 前置）一并 MITM，走 openMitmUpstream 的 ECH 模式。
         // d.pixiv.org 单独列：是 pixiv 自家但 TLD 不一样。被 BLOCKED_EXACT_HOSTS 拦下来的
         // a.pixiv.org / lc-event.pixiv.net 已经在 isBlockedHost 阶段 502 短路，不会落到这里。
@@ -1067,8 +1066,8 @@ class LocalPixivProxy(
             "d.pixiv.org",
         )
 
-        // 把 reCAPTCHA 的入口域改投到 recaptcha.net——Google 为被 GFW 屏蔽的地区准备的官方
-        // 替身域名。只换 TCP 拨号目标，client 看到的 URL/Host 仍然是 www.google.com；
+        // 把 reCAPTCHA 的入口域改投到 recaptcha.net（Google 在部分地区的官方替代域名）。
+        // 只换 TCP 拨号目标，client 看到的 URL/Host 仍然是 www.google.com；
         // recaptcha.net 后端会按原路径服务相同的脚本，登录就不会卡在人机验证。
         // 证书不匹配由 WebView 的 onReceivedSslError -> proceed() 兜底。
         val HOST_REWRITES: Map<String, String> = mapOf(
@@ -1077,9 +1076,10 @@ class LocalPixivProxy(
             "recaptcha.google.com" to "www.recaptcha.net",
         )
 
-        // pixiv 页面里夹带的广告 / 统计 / 社交分享，墙内都拨不通；让透明隧道去试就是 20 秒
-        // 起步的超时，单条页面要等好几次。直接 502 短路，DOMContentLoaded 后的子资源就能立刻
-        // 结束。reCAPTCHA 用的 gstatic / googleapis 不进这张表，留给系统 DNS 自己试。
+        // pixiv 页面里夹带的广告 / 统计 / 社交分享域名在多数网络环境不可达，让透明隧道
+        // 去试就是 20 秒起步的超时，单条页面要等好几次。直接 502 短路，DOMContentLoaded
+        // 后的子资源就能立刻结束。reCAPTCHA 用的 gstatic / googleapis 不进这张表，
+        // 留给系统 DNS 自己试。
         val BLOCKED_HOST_SUFFIXES: List<String> = listOf(
             "google-analytics.com",
             "googletagmanager.com",

@@ -6,8 +6,8 @@
 //
 //   - echB64 非空 → TCP + TLS 1.3 + ECH（外层 SNI = ECHConfig 的 public_name，
 //     内层 SNI = serverName，完整证书链与主机名校验）
-//   - echB64 为空 → TCP + TLS 1.3 无 SNI（ClientHello 不携带 SNI 扩展，
-//     绕开 GFW 的 SNI DPI；握手后按证书 SAN 补主机名校验）
+//   - echB64 为空 → TCP + TLS 1.3 无 SNI（ClientHello 不携带 SNI 扩展，适用于
+//     按 IP 直连且无法预知证书域名的场景；握手后按证书 SAN 补主机名校验）
 package illusttunnel
 
 import (
@@ -148,7 +148,7 @@ func buildTLSConfig(serverName, echB64 string) (*tls.Config, error) {
 		NextProtos: []string{"http/1.1"},
 	}
 	if echB64 == "" {
-		// 无 SNI 模式：GFW 只匹配 SNI；证书主机名校验由 verifySAN 事后补。
+		// 无 SNI 模式：按 IP 直连，证书主机名校验由 verifySAN 事后补。
 		cfg.InsecureSkipVerify = true
 		cfg.ServerName = ""
 		return cfg, nil

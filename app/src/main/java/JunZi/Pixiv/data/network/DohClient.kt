@@ -197,7 +197,7 @@ object DohEndpoints {
         Endpoint("https://dns1.digitale-gesellschaft.ch/dns-query", "瑞士 Digitale Gesellschaft 协会"),
         Endpoint("https://dns.digitale-gesellschaft.ch/dns-query", "瑞士 Digitale Gesellschaft 协会"),
         Endpoint("https://dns.aa.net.uk/dns-query", "英国 Andrews & Arnold ISP"),
-        Endpoint("https://anycast.uncensoreddns.org/dns-query", "丹麦 uncensoreddns.org（Anycast）"),
+        Endpoint("https://anycast.uncensoreddns.org/dns-query", "丹麦公共 DNS（Anycast）"),
         Endpoint("https://doh.tiarap.org/dns-query", "印尼社区维护（tiarap.org）"),
         Endpoint("https://doh.cleanbrowsing.org/doh/security-filter/", "美国 CleanBrowsing（安全过滤）"),
         Endpoint("https://fdns1.dismail.de/dns-query", "德国 dismail.de 隐私服务"),

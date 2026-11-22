@@ -1,6 +1,6 @@
 # IllustFerry
 
-IllustFerry（画渡）是一个面向 pixiv 的非官方 Android 客户端实验项目，面向中文用户在复杂网络环境中的日常浏览体验，重点是网络兼容直连、本地代理与图片加载 fallback，以及 Jetpack Compose 客户端界面。
+IllustFerry（画渡）是一个面向 pixiv 的非官方 Android 客户端实验项目，面向中文用户在部分网络环境下的日常浏览体验，重点是网络兼容直连、本地代理与图片加载 fallback，以及 Jetpack Compose 客户端界面。
 
 本项目与 pixiv Inc. 无关，不包含 pixiv 作品内容、用户数据、调试日志或固定代理 CA / 代理私钥。仓库中的 Android 测试签名配置仅用于调试和打包示例，正式分发请替换为自己的签名密钥。
 

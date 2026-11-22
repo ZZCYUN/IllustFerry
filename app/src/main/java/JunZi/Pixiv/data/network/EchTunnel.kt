@@ -12,8 +12,8 @@ import java.util.concurrent.atomic.AtomicBoolean
  * Go crypto/tls 原生支持 Encrypted Client Hello（draft-13, ECHConfigList）：
  *   - echConfigB64 非空 → TCP + TLS 1.3 + ECH（外层 SNI 用 ECHConfig 的 public_name，
  *     内层 SNI 用 [serverName]，完整证书链与主机名校验）
- *   - echConfigB64 为空 → TCP + TLS 1.3 无 SNI（ClientHello 不带 SNI 扩展绕开
- *     GFW DPI，握手后按证书 SAN 补主机名校验）
+ *   - echConfigB64 为空 → TCP + TLS 1.3 无 SNI（适用于按 IP 直连且无法预知证书域名的
+ *     场景，握手后按证书 SAN 补主机名校验）
  *
  * JNI 细节全部由 gomobile 绑定层处理；Go 侧完成 TLS 后隧道里就是明文字节流。
  */
